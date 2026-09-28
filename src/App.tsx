@@ -13,10 +13,11 @@ import { transposeNotes, transposeOctave, divideNote, joinNotes, editVelocity, e
 import { analyzePitchDistribution, analyzeRhythm, estimateKey, fullTrackAnalysis, getNoteName as analysisGetNoteName } from './midi/analysis';
 import { INSTRUMENT_CATALOG, getInstrumentByProgram, getInstrumentName, getAllFamilies } from './midi/instruments';
 import { getAllRecipes, executeRecipe, previewRecipe, Recipe } from './midi/recipes';
-import { Upload, Play, Pause, Square, Download, Undo2, Redo2, Settings, Music, AlertTriangle, CheckCircle, Info, X, ChevronRight, Layers, Grid3X3, Volume2, Save, FolderOpen, Trash2, FileAudio, ZoomIn, ZoomOut, SkipBack, SkipForward, BookOpen, Activity, Mic2, Wand2, ListChecks, BarChart3, Piano, HelpCircle, Copy, ArrowUpDown, Scissors, Link2, Move, Shield, Type } from 'lucide-react';
+import { processWithMMC, runAllTests, MMCProject as MMCProjectType, generateExportSummary, verifyBeforeExport } from './mmc';
+import { Upload, Play, Pause, Square, Download, Undo2, Redo2, Settings, Music, AlertTriangle, CheckCircle, Info, X, ChevronRight, Layers, Grid3X3, Volume2, Save, FolderOpen, Trash2, FileAudio, ZoomIn, ZoomOut, SkipBack, SkipForward, BookOpen, Activity, Mic2, Wand2, ListChecks, BarChart3, Piano, HelpCircle, Copy, ArrowUpDown, Scissors, Link2, Move, Shield, Type, Database, TestTube } from 'lucide-react';
 
 type View = 'welcome' | 'project' | 'projects-list' | 'examples' | 'help';
-type Tab = 'diagnosis' | 'piano-roll' | 'bars' | 'quantize' | 'editor' | 'analysis' | 'instruments' | 'recipes' | 'export';
+type Tab = 'diagnosis' | 'piano-roll' | 'bars' | 'quantize' | 'editor' | 'analysis' | 'instruments' | 'recipes' | 'mmc' | 'export';
 
 function App() {
   const [view, setView] = useState<View>('welcome');
@@ -40,6 +41,8 @@ function App() {
   const [trackMutes, setTrackMutes] = useState<Set<number>>(new Set());
   const [trackSolos, setTrackSolos] = useState<Set<number>>(new Set());
   const [editorMessage, setEditorMessage] = useState<string | null>(null);
+  const [mmcProject, setMmcProject] = useState<MMCProjectType | null>(null);
+  const [mmcProcessing, setMmcProcessing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pianoRollRef = useRef<HTMLCanvasElement>(null);
 
@@ -638,6 +641,7 @@ function App() {
                 { id: 'analysis' as Tab, label: 'Análisis', icon: BarChart3 },
                 { id: 'instruments' as Tab, label: 'Instrumentos', icon: Piano },
                 { id: 'recipes' as Tab, label: 'Recetas', icon: Wand2 },
+                { id: 'mmc' as Tab, label: 'MMC', icon: Database },
                 { id: 'export' as Tab, label: 'Exportar', icon: Download },
               ].map(tab => (
                 <button
@@ -700,6 +704,16 @@ function App() {
                 <RecipesView
                   project={project}
                   onApply={(newProject) => { pushHistory(project, 'Antes de receta'); setProject(newProject); saveProject(newProject); notify('Receta aplicada', 'success'); }}
+                />
+              )}
+              {activeTab === 'mmc' && (
+                <MMCView
+                  project={project}
+                  mmcProject={mmcProject}
+                  setMmcProject={setMmcProject}
+                  mmcProcessing={mmcProcessing}
+                  setMmcProcessing={setMmcProcessing}
+                  notify={notify}
                 />
               )}
               {activeTab === 'export' && <ExportView project={project} onExport={handleExport} />}
@@ -2086,6 +2100,148 @@ function HelpView({ onClose }: { onClose: () => void }) {
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// MMC View
+function MMCView({ project, mmcProject, setMmcProject, mmcProcessing, setMmcProcessing, notify }: {
+  project: MidiProject;
+  mmcProject: MMCProjectType | null;
+  setMmcProject: (m: MMCProjectType | null) => void;
+  mmcProcessing: boolean;
+  setMmcProcessing: (p: boolean) => void;
+  notify: (msg: string, type: 'success' | 'error' | 'info') => void;
+}) {
+  const [testResults, setTestResults] = useState<{ name: string; passed: boolean; message: string }[] | null>(null);
+
+  const handleBuildMMC = () => {
+    setMmcProcessing(true);
+    setTimeout(() => {
+      try {
+        const result = processWithMMC(project);
+        setMmcProject(result.mmc);
+        notify(`MMC construida: ${result.summary.totalEvents} eventos, ${result.summary.validatedEvents} validados`, 'success');
+      } catch (e) {
+        notify(`Error al construir MMC: ${(e as Error).message}`, 'error');
+      }
+      setMmcProcessing(false);
+    }, 100);
+  };
+
+  const handleRunTests = () => {
+    const results = runAllTests();
+    setTestResults(results);
+    const passed = results.filter(r => r.passed).length;
+    notify(`Tests: ${passed}/${results.length} aprobados`, passed === results.length ? 'success' : 'info');
+  };
+
+  const summary = mmcProject ? generateExportSummary(mmcProject) : null;
+  const verification = mmcProject ? verifyBeforeExport(mmcProject) : null;
+
+  return (
+    <div className="space-y-4 max-w-5xl">
+      <div className="bg-gray-800 rounded-lg p-4">
+        <h3 className="text-lg font-semibold text-white mb-2 flex items-center gap-2">
+          <Database size={18} /> Matriz Maestra de Conversión (MMC v1.0)
+        </h3>
+        <p className="text-sm text-gray-400 mb-4">
+          Single Source of Truth musical. Analiza, cuantiza, corrige y reconstruye con trazabilidad completa.
+        </p>
+
+        <div className="flex gap-2 mb-4">
+          <button
+            onClick={handleBuildMMC}
+            disabled={mmcProcessing}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 rounded text-sm flex items-center gap-2"
+          >
+            <Database size={14} /> {mmcProcessing ? 'Procesando...' : mmcProject ? 'Reconstruir MMC' : 'Construir MMC'}
+          </button>
+          <button
+            onClick={handleRunTests}
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 rounded text-sm flex items-center gap-2"
+          >
+            <TestTube size={14} /> Ejecutar tests
+          </button>
+        </div>
+
+        {mmcProject && summary && (
+          <div className="bg-gray-700 rounded p-3 mb-4">
+            <h4 className="text-sm font-semibold text-white mb-2">Estado de la MMC</h4>
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              <div><span className="text-gray-400">Eventos totales:</span> <span className="text-white font-mono">{summary.totalEvents}</span></div>
+              <div><span className="text-gray-400">Validados:</span> <span className="text-emerald-400 font-mono">{summary.validatedEvents}</span></div>
+              <div><span className="text-gray-400">Requieren revisión:</span> <span className="text-amber-400 font-mono">{summary.reviewRequiredEvents}</span></div>
+              <div><span className="text-gray-400">Overrides humanos:</span> <span className="text-blue-400 font-mono">{summary.humanOverrideEvents}</span></div>
+              <div><span className="text-gray-400">Clusters sospechosos:</span> <span className="text-red-400 font-mono">{summary.suspectClusters}</span></div>
+              <div><span className="text-gray-400">Pistas:</span> <span className="text-white font-mono">{mmcProject.tracks.length}</span></div>
+            </div>
+          </div>
+        )}
+
+        {verification && verification.issues.length > 0 && (
+          <div className="bg-amber-900/30 border border-amber-700 rounded p-3 mb-4">
+            <h4 className="text-sm font-semibold text-amber-300 mb-2">Advertencias pre-exportación</h4>
+            <ul className="text-xs text-amber-200 space-y-1">
+              {verification.issues.map((issue, i) => <li key={i}>⚠ {issue}</li>)}
+            </ul>
+          </div>
+        )}
+
+        {mmcProject && (
+          <div className="bg-gray-700 rounded p-3 mb-4">
+            <h4 className="text-sm font-semibold text-white mb-2">Pistas en MMC</h4>
+            <div className="space-y-1 text-xs">
+              {mmcProject.tracks.map(track => (
+                <div key={track.track_id} className="flex items-center justify-between bg-gray-600 rounded px-2 py-1">
+                  <span className="text-white">{track.name}</span>
+                  <div className="flex gap-2 text-gray-400">
+                    <span>Capa: <span className="text-indigo-300">{track.layer.replace('L', 'L').replace('_', ' ')}</span></span>
+                    <span>Eventos: <span className="text-white font-mono">{track.event_ids.length}</span></span>
+                    <span>Compases: <span className="text-white font-mono">{track.measures.length}</span></span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {mmcProject && mmcProject.log.length > 0 && (
+          <div className="bg-gray-700 rounded p-3">
+            <h4 className="text-sm font-semibold text-white mb-2">Log de operaciones</h4>
+            <div className="max-h-40 overflow-y-auto space-y-1 text-xs font-mono">
+              {mmcProject.log.slice(-20).map((entry, i) => (
+                <div key={i} className={`${
+                  entry.level === 'ERROR' ? 'text-red-400' :
+                  entry.level === 'WARN' ? 'text-amber-400' :
+                  entry.level === 'INFO' ? 'text-blue-300' : 'text-gray-400'
+                }`}>
+                  [{entry.level}] {entry.module}: {entry.message}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {testResults && (
+          <div className="bg-gray-700 rounded p-3 mt-4">
+            <h4 className="text-sm font-semibold text-white mb-2">Tests obligatorios (Sección 22)</h4>
+            <div className="space-y-1">
+              {testResults.map((r, i) => (
+                <div key={i} className={`flex items-start gap-2 text-xs p-1 rounded ${r.passed ? 'bg-emerald-900/20' : 'bg-red-900/20'}`}>
+                  <span className={r.passed ? 'text-emerald-400' : 'text-red-400'}>
+                    {r.passed ? '✓' : '✗'}
+                  </span>
+                  <div>
+                    <p className="text-white font-medium">{r.name}</p>
+                    <p className="text-gray-400">{r.message}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
