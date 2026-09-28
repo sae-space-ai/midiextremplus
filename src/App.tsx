@@ -14,10 +14,11 @@ import { analyzePitchDistribution, analyzeRhythm, estimateKey, fullTrackAnalysis
 import { INSTRUMENT_CATALOG, getInstrumentByProgram, getInstrumentName, getAllFamilies } from './midi/instruments';
 import { getAllRecipes, executeRecipe, previewRecipe, Recipe } from './midi/recipes';
 import { processWithMMC, runAllTests, MMCProject as MMCProjectType, generateExportSummary, verifyBeforeExport } from './mmc';
-import { Upload, Play, Pause, Square, Download, Undo2, Redo2, Settings, Music, AlertTriangle, CheckCircle, Info, X, ChevronRight, Layers, Grid3X3, Volume2, Save, FolderOpen, Trash2, FileAudio, ZoomIn, ZoomOut, SkipBack, SkipForward, BookOpen, Activity, Mic2, Wand2, ListChecks, BarChart3, Piano, HelpCircle, Copy, ArrowUpDown, Scissors, Link2, Move, Shield, Type, Database, TestTube } from 'lucide-react';
+import { extractScoreAndParts, exportFullScoreToMusicXML, exportPartToMusicXMLString, downloadMusicXML, runAllScoreTests, Score as ScoreType, IndividualPart as IndividualPartType, ExtractionResult as ExtractionResultType } from './score';
+import { Upload, Play, Pause, Square, Download, Undo2, Redo2, Settings, Music, AlertTriangle, CheckCircle, Info, X, ChevronRight, Layers, Grid3X3, Volume2, Save, FolderOpen, Trash2, FileAudio, ZoomIn, ZoomOut, SkipBack, SkipForward, BookOpen, Activity, Mic2, Wand2, ListChecks, BarChart3, Piano, HelpCircle, Copy, ArrowUpDown, Scissors, Link2, Move, Shield, Type, Database, TestTube, FileMusic, Users } from 'lucide-react';
 
 type View = 'welcome' | 'project' | 'projects-list' | 'examples' | 'help';
-type Tab = 'diagnosis' | 'piano-roll' | 'bars' | 'quantize' | 'editor' | 'analysis' | 'instruments' | 'recipes' | 'mmc' | 'export';
+type Tab = 'diagnosis' | 'piano-roll' | 'bars' | 'quantize' | 'editor' | 'analysis' | 'instruments' | 'recipes' | 'mmc' | 'score' | 'export';
 
 function App() {
   const [view, setView] = useState<View>('welcome');
@@ -43,6 +44,8 @@ function App() {
   const [editorMessage, setEditorMessage] = useState<string | null>(null);
   const [mmcProject, setMmcProject] = useState<MMCProjectType | null>(null);
   const [mmcProcessing, setMmcProcessing] = useState(false);
+  const [extractionResult, setExtractionResult] = useState<ExtractionResultType | null>(null);
+  const [scoreProcessing, setScoreProcessing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pianoRollRef = useRef<HTMLCanvasElement>(null);
 
@@ -642,6 +645,7 @@ function App() {
                 { id: 'instruments' as Tab, label: 'Instrumentos', icon: Piano },
                 { id: 'recipes' as Tab, label: 'Recetas', icon: Wand2 },
                 { id: 'mmc' as Tab, label: 'MMC', icon: Database },
+                { id: 'score' as Tab, label: 'Score & Parts', icon: FileMusic },
                 { id: 'export' as Tab, label: 'Exportar', icon: Download },
               ].map(tab => (
                 <button
@@ -713,6 +717,17 @@ function App() {
                   setMmcProject={setMmcProject}
                   mmcProcessing={mmcProcessing}
                   setMmcProcessing={setMmcProcessing}
+                  notify={notify}
+                />
+              )}
+              {activeTab === 'score' && (
+                <ScoreView
+                  project={project}
+                  mmcProject={mmcProject}
+                  extractionResult={extractionResult}
+                  setExtractionResult={setExtractionResult}
+                  scoreProcessing={scoreProcessing}
+                  setScoreProcessing={setScoreProcessing}
                   notify={notify}
                 />
               )}
@@ -2229,6 +2244,248 @@ function MMCView({ project, mmcProject, setMmcProject, mmcProcessing, setMmcProc
             <h4 className="text-sm font-semibold text-white mb-2">Tests obligatorios (Sección 22)</h4>
             <div className="space-y-1">
               {testResults.map((r, i) => (
+                <div key={i} className={`flex items-start gap-2 text-xs p-1 rounded ${r.passed ? 'bg-emerald-900/20' : 'bg-red-900/20'}`}>
+                  <span className={r.passed ? 'text-emerald-400' : 'text-red-400'}>
+                    {r.passed ? '✓' : '✗'}
+                  </span>
+                  <div>
+                    <p className="text-white font-medium">{r.name}</p>
+                    <p className="text-gray-400">{r.message}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Score & Parts View
+function ScoreView({ project, mmcProject, extractionResult, setExtractionResult, scoreProcessing, setScoreProcessing, notify }: {
+  project: MidiProject;
+  mmcProject: MMCProjectType | null;
+  extractionResult: ExtractionResultType | null;
+  setExtractionResult: (r: ExtractionResultType | null) => void;
+  scoreProcessing: boolean;
+  setScoreProcessing: (p: boolean) => void;
+  notify: (msg: string, type: 'success' | 'error' | 'info') => void;
+}) {
+  const [scoreTests, setScoreTests] = useState<{ name: string; passed: boolean; message: string }[] | null>(null);
+
+  const handleExtractScoreAndParts = () => {
+    if (!mmcProject) {
+      notify('Primero debes construir la MMC', 'error');
+      return;
+    }
+
+    setScoreProcessing(true);
+    setTimeout(() => {
+      try {
+        const metadata = {
+          title: project.name,
+          subtitle: null,
+          composer: null,
+          arranger: null,
+          lyricist: null,
+          copyright: null,
+          movementNumber: null,
+          movementTitle: null,
+          workNumber: null,
+          opus: null,
+          source: null,
+          encoding_date: new Date().toISOString(),
+          encoder: 'MIDIExtremPlus MMC v1.0',
+          description: null,
+        };
+
+        const structure = {
+          segno_measure: null,
+          coda_measure: null,
+          fine_measure: null,
+          dacapo: false,
+          dalsegno: false,
+          tocoda: null,
+          repeat_starts: [],
+          repeat_ends: [],
+          endings: [],
+        };
+
+        const result = extractScoreAndParts(mmcProject, metadata, structure);
+        setExtractionResult(result);
+        notify(`Score y ${result.parts.length} particellas extraídas`, 'success');
+      } catch (e) {
+        notify(`Error al extraer: ${(e as Error).message}`, 'error');
+      }
+      setScoreProcessing(false);
+    }, 100);
+  };
+
+  const handleExportFullScore = () => {
+    if (!extractionResult?.score) {
+      notify('Primero extrae el score', 'error');
+      return;
+    }
+
+    const musicxml = exportFullScoreToMusicXML(extractionResult.score);
+    downloadMusicXML(musicxml, `${project.name}_FULL_SCORE.musicxml`);
+    notify('Full Score exportado como MusicXML', 'success');
+  };
+
+  const handleExportAllParts = () => {
+    if (!extractionResult?.parts || extractionResult.parts.length === 0) {
+      notify('Primero extrae las particellas', 'error');
+      return;
+    }
+
+    for (const part of extractionResult.parts) {
+      const musicxml = exportPartToMusicXMLString(part);
+      const filename = `${project.name}_${part.instrument_name.replace(/\s+/g, '_')}.musicxml`;
+      downloadMusicXML(musicxml, filename);
+    }
+    notify(`${extractionResult.parts.length} particellas exportadas`, 'success');
+  };
+
+  const handleExportSinglePart = (part: IndividualPartType) => {
+    const musicxml = exportPartToMusicXMLString(part);
+    const filename = `${project.name}_${part.instrument_name.replace(/\s+/g, '_')}.musicxml`;
+    downloadMusicXML(musicxml, filename);
+    notify(`Particella de ${part.instrument_name} exportada`, 'success');
+  };
+
+  const handleRunScoreTests = () => {
+    const results = runAllScoreTests();
+    setScoreTests(results);
+    const passed = results.filter(r => r.passed).length;
+    notify(`Tests Score: ${passed}/${results.length} aprobados`, passed === results.length ? 'success' : 'info');
+  };
+
+  return (
+    <div className="space-y-4 max-w-5xl">
+      <div className="bg-gray-800 rounded-lg p-4">
+        <h3 className="text-lg font-semibold text-white mb-2 flex items-center gap-2">
+          <FileMusic size={18} /> Score & Parts
+        </h3>
+        <p className="text-sm text-gray-400 mb-4">
+          Extrae particellas individuales y Full Conductor Score desde la MMC validada.
+        </p>
+
+        <div className="flex gap-2 mb-4 flex-wrap">
+          <button
+            onClick={handleExtractScoreAndParts}
+            disabled={scoreProcessing || !mmcProject}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 rounded text-sm flex items-center gap-2"
+          >
+            <Users size={14} /> {scoreProcessing ? 'Extrayendo...' : 'Extraer Score y Parts'}
+          </button>
+          <button
+            onClick={handleExportFullScore}
+            disabled={!extractionResult?.score}
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-600 rounded text-sm flex items-center gap-2"
+          >
+            <Download size={14} /> Export Full Score (MusicXML)
+          </button>
+          <button
+            onClick={handleExportAllParts}
+            disabled={!extractionResult?.parts || extractionResult.parts.length === 0}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded text-sm flex items-center gap-2"
+          >
+            <Download size={14} /> Export All Parts
+          </button>
+          <button
+            onClick={handleRunScoreTests}
+            className="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded text-sm flex items-center gap-2"
+          >
+            <TestTube size={14} /> Tests Score
+          </button>
+        </div>
+
+        {!mmcProject && (
+          <div className="bg-amber-900/30 border border-amber-700 rounded p-3 mb-4">
+            <p className="text-sm text-amber-300">
+              <AlertTriangle size={14} className="inline mr-1" />
+              Debes construir la MMC primero (pestaña MMC) antes de extraer score y parts.
+            </p>
+          </div>
+        )}
+
+        {extractionResult && (
+          <>
+            <div className="bg-gray-700 rounded p-3 mb-4">
+              <h4 className="text-sm font-semibold text-white mb-2">Estadísticas de extracción</h4>
+              <div className="grid grid-cols-3 gap-2 text-xs">
+                <div><span className="text-gray-400">Instrumentos:</span> <span className="text-white font-mono">{extractionResult.stats.total_instruments}</span></div>
+                <div><span className="text-gray-400">Compases:</span> <span className="text-white font-mono">{extractionResult.stats.total_measures}</span></div>
+                <div><span className="text-gray-400">Eventos totales:</span> <span className="text-white font-mono">{extractionResult.stats.total_events}</span></div>
+                <div><span className="text-gray-400">Eventos derivados:</span> <span className="text-blue-400 font-mono">{extractionResult.stats.derived_events}</span></div>
+                <div><span className="text-gray-400">Requieren revisión:</span> <span className="text-amber-400 font-mono">{extractionResult.stats.instruments_review_required}</span></div>
+              </div>
+            </div>
+
+            {extractionResult.warnings.length > 0 && (
+              <div className="bg-amber-900/30 border border-amber-700 rounded p-3 mb-4">
+                <h4 className="text-sm font-semibold text-amber-300 mb-2">Advertencias</h4>
+                <ul className="text-xs text-amber-200 space-y-1">
+                  {extractionResult.warnings.map((w, i) => <li key={i}>⚠ {w}</li>)}
+                </ul>
+              </div>
+            )}
+
+            {extractionResult.errors.length > 0 && (
+              <div className="bg-red-900/30 border border-red-700 rounded p-3 mb-4">
+                <h4 className="text-sm font-semibold text-red-300 mb-2">Errores</h4>
+                <ul className="text-xs text-red-200 space-y-1">
+                  {extractionResult.errors.map((e, i) => <li key={i}>✗ {e}</li>)}
+                </ul>
+              </div>
+            )}
+
+            {extractionResult.score && (
+              <div className="bg-gray-700 rounded p-3 mb-4">
+                <h4 className="text-sm font-semibold text-white mb-2">Full Conductor Score</h4>
+                <div className="text-xs text-gray-300 space-y-1">
+                  <p>Compases: {extractionResult.score.total_measures}</p>
+                  <p>Instrumentos: {extractionResult.score.all_instruments.length}</p>
+                  <p>Grupos: {extractionResult.score.groups.map(g => g.name).join(', ')}</p>
+                </div>
+              </div>
+            )}
+
+            {extractionResult.parts.length > 0 && (
+              <div className="bg-gray-700 rounded p-3">
+                <h4 className="text-sm font-semibold text-white mb-2">Particellas individuales</h4>
+                <div className="space-y-1 max-h-64 overflow-y-auto">
+                  {extractionResult.parts.map(part => (
+                    <div key={part.id} className="flex items-center justify-between bg-gray-600 rounded px-2 py-1 text-xs">
+                      <div>
+                        <span className="text-white">{part.instrument_name}</span>
+                        <span className="text-gray-400 ml-2">
+                          ({part.note_count} notas, {part.total_measures} compases)
+                        </span>
+                        {part.instrument.review_required && (
+                          <span className="text-amber-400 ml-2">⚠ Revisar</span>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => handleExportSinglePart(part)}
+                        className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 rounded text-xs"
+                      >
+                        Exportar
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {scoreTests && (
+          <div className="bg-gray-700 rounded p-3 mt-4">
+            <h4 className="text-sm font-semibold text-white mb-2">Tests Score & Parts</h4>
+            <div className="space-y-1">
+              {scoreTests.map((r, i) => (
                 <div key={i} className={`flex items-start gap-2 text-xs p-1 rounded ${r.passed ? 'bg-emerald-900/20' : 'bg-red-900/20'}`}>
                   <span className={r.passed ? 'text-emerald-400' : 'text-red-400'}>
                     {r.passed ? '✓' : '✗'}
