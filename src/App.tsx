@@ -15,10 +15,11 @@ import { INSTRUMENT_CATALOG, getInstrumentByProgram, getInstrumentName, getAllFa
 import { getAllRecipes, executeRecipe, previewRecipe, Recipe } from './midi/recipes';
 import { processWithMMC, runAllTests, MMCProject as MMCProjectType, generateExportSummary, verifyBeforeExport } from './mmc';
 import { extractScoreAndParts, exportFullScoreToMusicXML, exportPartToMusicXMLString, downloadMusicXML, runAllScoreTests, Score as ScoreType, IndividualPart as IndividualPartType, ExtractionResult as ExtractionResultType } from './score';
-import { Upload, Play, Pause, Square, Download, Undo2, Redo2, Settings, Music, AlertTriangle, CheckCircle, Info, X, ChevronRight, Layers, Grid3X3, Volume2, Save, FolderOpen, Trash2, FileAudio, ZoomIn, ZoomOut, SkipBack, SkipForward, BookOpen, Activity, Mic2, Wand2, ListChecks, BarChart3, Piano, HelpCircle, Copy, ArrowUpDown, Scissors, Link2, Move, Shield, Type, Database, TestTube, FileMusic, Users } from 'lucide-react';
+import { runSovereignAutocorrection, SAEResult, AutocorrectReport, AnalysisProgress } from './sae';
+import { Upload, Play, Pause, Square, Download, Undo2, Redo2, Settings, Music, AlertTriangle, CheckCircle, Info, X, ChevronRight, Layers, Grid3X3, Volume2, Save, FolderOpen, Trash2, FileAudio, ZoomIn, ZoomOut, SkipBack, SkipForward, BookOpen, Activity, Mic2, Wand2, ListChecks, BarChart3, Piano, HelpCircle, Copy, ArrowUpDown, Scissors, Link2, Move, Shield, Type, Database, TestTube, FileMusic, Users, Zap } from 'lucide-react';
 
 type View = 'welcome' | 'project' | 'projects-list' | 'examples' | 'help';
-type Tab = 'diagnosis' | 'piano-roll' | 'bars' | 'quantize' | 'editor' | 'analysis' | 'instruments' | 'recipes' | 'mmc' | 'score' | 'export';
+type Tab = 'diagnosis' | 'piano-roll' | 'bars' | 'quantize' | 'editor' | 'analysis' | 'instruments' | 'recipes' | 'mmc' | 'score' | 'sae' | 'export';
 
 function App() {
   const [view, setView] = useState<View>('welcome');
@@ -46,6 +47,9 @@ function App() {
   const [mmcProcessing, setMmcProcessing] = useState(false);
   const [extractionResult, setExtractionResult] = useState<ExtractionResultType | null>(null);
   const [scoreProcessing, setScoreProcessing] = useState(false);
+  const [saeResult, setSaeResult] = useState<SAEResult | null>(null);
+  const [saeProgress, setSaeProgress] = useState<AnalysisProgress | null>(null);
+  const [saeRunning, setSaeRunning] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pianoRollRef = useRef<HTMLCanvasElement>(null);
 
@@ -646,6 +650,7 @@ function App() {
                 { id: 'recipes' as Tab, label: 'Recetas', icon: Wand2 },
                 { id: 'mmc' as Tab, label: 'MMC', icon: Database },
                 { id: 'score' as Tab, label: 'Score & Parts', icon: FileMusic },
+                { id: 'sae' as Tab, label: 'SAE', icon: Zap },
                 { id: 'export' as Tab, label: 'Exportar', icon: Download },
               ].map(tab => (
                 <button
@@ -729,6 +734,22 @@ function App() {
                   scoreProcessing={scoreProcessing}
                   setScoreProcessing={setScoreProcessing}
                   notify={notify}
+                />
+              )}
+              {activeTab === 'sae' && (
+                <SAEView
+                  project={project}
+                  mmcProject={mmcProject}
+                  saeResult={saeResult}
+                  setSaeResult={setSaeResult}
+                  saeProgress={saeProgress}
+                  setSaeProgress={setSaeProgress}
+                  saeRunning={saeRunning}
+                  setSaeRunning={setSaeRunning}
+                  notify={notify}
+                  setProject={setProject}
+                  pushHistory={pushHistory}
+                  saveProject={saveProject}
                 />
               )}
               {activeTab === 'export' && <ExportView project={project} onExport={handleExport} />}
@@ -2500,6 +2521,226 @@ function ScoreView({ project, mmcProject, extractionResult, setExtractionResult,
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// SAE View
+function SAEView({ project, mmcProject, saeResult, setSaeResult, saeProgress, setSaeProgress, saeRunning, setSaeRunning, notify, setProject, pushHistory, saveProject }: {
+  project: MidiProject;
+  mmcProject: MMCProjectType | null;
+  saeResult: SAEResult | null;
+  setSaeResult: (r: SAEResult | null) => void;
+  saeProgress: AnalysisProgress | null;
+  setSaeProgress: (p: AnalysisProgress | null) => void;
+  saeRunning: boolean;
+  setSaeRunning: (r: boolean) => void;
+  notify: (msg: string, type: 'success' | 'error' | 'info') => void;
+  setProject: (p: MidiProject) => void;
+  pushHistory: (p: MidiProject, label: string) => void;
+  saveProject: (p: MidiProject) => void;
+}) {
+  const handleRunSAE = async () => {
+    if (!mmcProject) {
+      notify('Primero debes construir la MMC', 'error');
+      return;
+    }
+
+    setSaeRunning(true);
+    setSaeResult(null);
+    setSaeProgress({ phase: 'PRESERVING_ORIGINAL', progress: 0, message: 'Iniciando...' });
+
+    try {
+      const result = await runSovereignAutocorrection(mmcProject, undefined, (progress) => {
+        setSaeProgress(progress);
+      });
+
+      setSaeResult(result);
+
+      if (result.success && result.correctedProject) {
+        // Guardar historial antes de aplicar
+        pushHistory(project, 'Antes de SAE');
+        
+        // Convertir MMC corregido a MidiProject
+        const { mmcToMidiProject } = await import('./mmc/export-adapter');
+        const correctedMidiProject = mmcToMidiProject(result.correctedProject, project);
+        
+        setProject(correctedMidiProject);
+        saveProject(correctedMidiProject);
+        
+        notify(`SAE completado: ${result.report?.autoCorrected || 0} correcciones aplicadas`, 'success');
+      } else {
+        notify(`SAE falló: ${result.error}`, 'error');
+      }
+    } catch (error) {
+      notify(`Error en SAE: ${(error as Error).message}`, 'error');
+    } finally {
+      setSaeRunning(false);
+    }
+  };
+
+  const handleRevert = () => {
+    const previousProject = undo(project);
+    if (previousProject) {
+      setProject(previousProject);
+      saveProject(previousProject);
+      setSaeResult(null);
+      notify('SAE revertido', 'info');
+    }
+  };
+
+  return (
+    <div className="space-y-4 max-w-5xl">
+      <div className="bg-gradient-to-br from-indigo-900 to-purple-900 rounded-lg p-6 border border-indigo-700">
+        <h3 className="text-2xl font-bold text-white mb-2 flex items-center gap-3">
+          <Zap size={28} className="text-yellow-400" />
+          Sovereign Autocorrection Engine
+        </h3>
+        <p className="text-indigo-200 mb-4">
+          Motor de corrección autónoma que analiza, diagnostica y corrige la obra completa de forma soberana,
+          preservando la intención musical y aplicando solo correcciones con evidencia suficiente.
+        </p>
+
+        <div className="flex gap-3 mb-4">
+          <button
+            onClick={handleRunSAE}
+            disabled={saeRunning || !mmcProject}
+            className="px-6 py-3 bg-yellow-500 hover:bg-yellow-600 disabled:bg-gray-600 text-black font-bold rounded-lg flex items-center gap-2 transition-colors"
+          >
+            <Zap size={20} />
+            {saeRunning ? 'Ejecutando...' : 'ANALYZE & AUTOCORRECT COMPLETE SCORE'}
+          </button>
+          
+          {saeResult && (
+            <button
+              onClick={handleRevert}
+              className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg flex items-center gap-2"
+            >
+              <Undo2 size={20} />
+              REVERT SAE
+            </button>
+          )}
+        </div>
+
+        {!mmcProject && (
+          <div className="bg-amber-900/30 border border-amber-700 rounded p-3">
+            <p className="text-sm text-amber-300">
+              <AlertTriangle size={14} className="inline mr-1" />
+              Debes construir la MMC primero (pestaña MMC) antes de ejecutar SAE.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Progreso */}
+      {saeRunning && saeProgress && (
+        <div className="bg-gray-800 rounded-lg p-4">
+          <h4 className="text-sm font-semibold text-white mb-2">Progreso del análisis</h4>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-gray-400">{saeProgress.message}</span>
+              <span className="text-indigo-400 font-mono">{saeProgress.progress}%</span>
+            </div>
+            <div className="w-full bg-gray-700 rounded-full h-2">
+              <div
+                className="bg-indigo-500 h-2 rounded-full transition-all duration-300"
+                style={{ width: `${saeProgress.progress}%` }}
+              />
+            </div>
+            <p className="text-xs text-gray-500">Fase: {saeProgress.phase.replace(/_/g, ' ')}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Resultados */}
+      {saeResult && saeResult.report && (
+        <div className="bg-gray-800 rounded-lg p-4 space-y-4">
+          <h4 className="text-lg font-semibold text-white">Reporte de Autocorrección</h4>
+
+          {/* Resumen */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-gray-700 rounded p-3 text-center">
+              <p className="text-2xl font-bold text-white">{saeResult.report.totalEvents}</p>
+              <p className="text-xs text-gray-400">Eventos totales</p>
+            </div>
+            <div className="bg-gray-700 rounded p-3 text-center">
+              <p className="text-2xl font-bold text-amber-400">{saeResult.report.issuesDetected}</p>
+              <p className="text-xs text-gray-400">Incidencias detectadas</p>
+            </div>
+            <div className="bg-gray-700 rounded p-3 text-center">
+              <p className="text-2xl font-bold text-emerald-400">{saeResult.report.autoCorrected}</p>
+              <p className="text-xs text-gray-400">Autocorregidas</p>
+            </div>
+            <div className="bg-gray-700 rounded p-3 text-center">
+              <p className="text-2xl font-bold text-blue-400">{saeResult.report.protected}</p>
+              <p className="text-xs text-gray-400">Protegidas</p>
+            </div>
+            <div className="bg-gray-700 rounded p-3 text-center">
+              <p className="text-2xl font-bold text-gray-400">{saeResult.report.unchanged}</p>
+              <p className="text-xs text-gray-400">Sin cambios</p>
+            </div>
+            <div className="bg-gray-700 rounded p-3 text-center">
+              <p className="text-2xl font-bold text-red-400">{saeResult.report.reviewRequired}</p>
+              <p className="text-xs text-gray-400">Requieren revisión</p>
+            </div>
+          </div>
+
+          {/* Métricas de calidad */}
+          <div className="bg-gray-700 rounded p-3">
+            <h5 className="text-sm font-semibold text-white mb-2">Métricas de calidad</h5>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div>
+                <span className="text-gray-400">Antes:</span>{' '}
+                <span className="text-white font-mono">{(saeResult.report.qualityMetrics.before.overallScore * 100).toFixed(1)}%</span>
+              </div>
+              <div>
+                <span className="text-gray-400">Después:</span>{' '}
+                <span className="text-emerald-400 font-mono">{(saeResult.report.qualityMetrics.after.overallScore * 100).toFixed(1)}%</span>
+              </div>
+              <div className="col-span-2">
+                <span className="text-gray-400">Mejora:</span>{' '}
+                <span className={`font-mono ${saeResult.report.qualityMetrics.improvement >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {saeResult.report.qualityMetrics.improvement >= 0 ? '+' : ''}{(saeResult.report.qualityMetrics.improvement * 100).toFixed(1)}%
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Desglose por tipo */}
+          {Object.keys(saeResult.report.byIssueType).length > 0 && (
+            <div className="bg-gray-700 rounded p-3">
+              <h5 className="text-sm font-semibold text-white mb-2">Desglose por tipo de incidencia</h5>
+              <div className="space-y-1 text-xs">
+                {Object.entries(saeResult.report.byIssueType).map(([type, stats]) => (
+                  <div key={type} className="flex justify-between">
+                    <span className="text-gray-300">{type.replace(/_/g, ' ')}</span>
+                    <span className="text-gray-400">
+                      {stats.corrected}/{stats.detected} corregidas
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Desglose por instrumento */}
+          {Object.keys(saeResult.report.byInstrument).length > 0 && (
+            <div className="bg-gray-700 rounded p-3">
+              <h5 className="text-sm font-semibold text-white mb-2">Desglose por instrumento</h5>
+              <div className="space-y-1 text-xs max-h-40 overflow-y-auto">
+                {Object.entries(saeResult.report.byInstrument).map(([instrument, stats]) => (
+                  <div key={instrument} className="flex justify-between">
+                    <span className="text-gray-300">{instrument}</span>
+                    <span className="text-gray-400">
+                      {stats.autoCorrected}/{stats.issuesDetected} corregidas
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
