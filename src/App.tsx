@@ -16,7 +16,8 @@ import { getAllRecipes, executeRecipe, previewRecipe, Recipe } from './midi/reci
 import { processWithMMC, runAllTests, MMCProject as MMCProjectType, generateExportSummary, verifyBeforeExport } from './mmc';
 import { extractScoreAndParts, exportFullScoreToMusicXML, exportPartToMusicXMLString, downloadMusicXML, runAllScoreTests, Score as ScoreType, IndividualPart as IndividualPartType, ExtractionResult as ExtractionResultType } from './score';
 import { runSovereignAutocorrection, SAEResult, AutocorrectReport, AnalysisProgress } from './sae';
-import { Upload, Play, Pause, Square, Download, Undo2, Redo2, Settings, Music, AlertTriangle, CheckCircle, Info, X, ChevronRight, Layers, Grid3X3, Volume2, Save, FolderOpen, Trash2, FileAudio, ZoomIn, ZoomOut, SkipBack, SkipForward, BookOpen, Activity, Mic2, Wand2, ListChecks, BarChart3, Piano, HelpCircle, Copy, ArrowUpDown, Scissors, Link2, Move, Shield, Type, Database, TestTube, FileMusic, Users, Zap } from 'lucide-react';
+import { autoAssignTracks, applyAssignments, TrackAssignment, getFamilyDisplayName } from './atae';
+import { Upload, Play, Pause, Square, Download, Undo2, Redo2, Settings, Music, AlertTriangle, CheckCircle, Info, X, ChevronRight, Layers, Grid3X3, Volume2, Save, FolderOpen, Trash2, FileAudio, ZoomIn, ZoomOut, SkipBack, SkipForward, BookOpen, Activity, Mic2, Wand2, ListChecks, BarChart3, Piano, HelpCircle, Copy, ArrowUpDown, Scissors, Link2, Move, Shield, Type, Database, TestTube, FileMusic, Users, Zap, Sparkles } from 'lucide-react';
 
 type View = 'welcome' | 'project' | 'projects-list' | 'examples' | 'help';
 type Tab = 'diagnosis' | 'piano-roll' | 'bars' | 'quantize' | 'editor' | 'analysis' | 'instruments' | 'recipes' | 'mmc' | 'score' | 'sae' | 'export';
@@ -50,6 +51,7 @@ function App() {
   const [saeResult, setSaeResult] = useState<SAEResult | null>(null);
   const [saeProgress, setSaeProgress] = useState<AnalysisProgress | null>(null);
   const [saeRunning, setSaeRunning] = useState(false);
+  const [trackAssignments, setTrackAssignments] = useState<TrackAssignment[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pianoRollRef = useRef<HTMLCanvasElement>(null);
 
@@ -96,12 +98,20 @@ function App() {
       const buffer = await file.arrayBuffer();
       const parsed = parseMidiFile(buffer);
       parsed.name = file.name.replace(/\.(mid|midi)$/i, '');
-      saveProject(parsed);
-      setProject(parsed);
+      
+      // Ejecutar ATAE automáticamente
+      const assignments = autoAssignTracks(parsed);
+      const updatedProject = applyAssignments(parsed, assignments);
+      setTrackAssignments(assignments);
+      
+      saveProject(updatedProject);
+      setProject(updatedProject);
       setView('project');
       setActiveTab('diagnosis');
       clearHistory();
-      notify(`Archivo cargado: ${parsed.tracks.length} pistas, ${parsed.tracks.reduce((s, t) => s + t.noteCount, 0)} notas`, 'success');
+      
+      const assignedCount = assignments.filter(a => a.assignmentConfidence !== 'REVIEW').length;
+      notify(`Archivo cargado: ${parsed.tracks.length} pistas, ${assignedCount} asignadas automáticamente`, 'success');
     } catch (err) {
       notify(`Error al leer el archivo: ${(err as Error).message}`, 'error');
     }
@@ -532,6 +542,22 @@ function App() {
                 )}
               </div>
               <div className="w-px h-6 bg-gray-600 mx-1" />
+              <button 
+                onClick={() => {
+                  if (!project) return;
+                  const assignments = autoAssignTracks(project);
+                  const updatedProject = applyAssignments(project, assignments);
+                  setTrackAssignments(assignments);
+                  setProject(updatedProject);
+                  saveProject(updatedProject);
+                  const assignedCount = assignments.filter(a => a.assignmentConfidence !== 'REVIEW').length;
+                  notify(`Reanálisis completado: ${assignedCount} pistas asignadas`, 'success');
+                }}
+                className="px-3 py-1.5 text-sm bg-purple-600 hover:bg-purple-700 rounded flex items-center gap-1"
+                title="Analizar y asignar instrumentos automáticamente"
+              >
+                <Sparkles size={14} /> Auto Asignar
+              </button>
               <button onClick={handleSaveVersion} className="px-3 py-1.5 text-sm bg-indigo-600 hover:bg-indigo-700 rounded flex items-center gap-1">
                 <Save size={14} /> Guardar versión
               </button>
@@ -576,36 +602,63 @@ function App() {
               </h3>
             </div>
             <div className="p-2">
-              {project.tracks.map((track, idx) => (
-                <div key={idx} className={`p-2 rounded mb-1 cursor-pointer transition-colors ${
-                  selectedTrack === idx ? 'bg-indigo-900 border border-indigo-600' : 'hover:bg-gray-700'
-                }`} onClick={() => setSelectedTrack(idx)}>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium truncate">{track.name}</span>
-                    <span className="text-xs text-gray-400">{track.noteCount}n</span>
+              {project.tracks.map((track, idx) => {
+                const assignment = trackAssignments.find(a => a.trackId === idx);
+                const confidenceColor = assignment?.assignmentConfidence === 'HIGH' ? 'text-emerald-400' :
+                                       assignment?.assignmentConfidence === 'MEDIUM' ? 'text-yellow-400' :
+                                       assignment?.assignmentConfidence === 'LOW' ? 'text-orange-400' : 'text-gray-500';
+                const sourceIcon = assignment?.humanOverride ? '✋' :
+                                  assignment?.assignmentSource === 'TRACK_NAME' ? '🏷️' :
+                                  assignment?.assignmentSource === 'PROGRAM_CHANGE' ? '🎹' :
+                                  assignment?.assignmentSource === 'CHANNEL' ? '📡' :
+                                  assignment?.assignmentSource === 'REGISTER_ANALYSIS' ? '📊' :
+                                  assignment?.assignmentSource === 'BEHAVIOR_ANALYSIS' ? '🎼' : '❓';
+                
+                return (
+                  <div key={idx} className={`p-2 rounded mb-1 cursor-pointer transition-colors ${
+                    selectedTrack === idx ? 'bg-indigo-900 border border-indigo-600' : 'hover:bg-gray-700'
+                  }`} onClick={() => setSelectedTrack(idx)}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium truncate">{track.name}</span>
+                      <span className="text-xs text-gray-400">{track.noteCount}n</span>
+                    </div>
+                    <div className="flex items-center gap-1 mt-1">
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${track.isPercussion ? 'bg-orange-900 text-orange-300' : 'bg-gray-700 text-gray-400'}`}>
+                        Ch {track.channel + 1}
+                      </span>
+                      {assignment && (
+                        <span className={`text-xs ${confidenceColor}`} title={`Confianza: ${assignment.assignmentConfidence}`}>
+                          {sourceIcon}
+                        </span>
+                      )}
+                      <select
+                        value={track.role}
+                        onChange={e => toggleTrackRole(idx, e.target.value)}
+                        className="text-xs bg-gray-700 border-0 rounded px-1 py-0.5 text-gray-300 flex-1"
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <option value="unassigned">Sin asignar</option>
+                        <option value="percussion">Percusión</option>
+                        <option value="bass">Bajo</option>
+                        <option value="harmony">Armonía</option>
+                        <option value="melody">Melodía</option>
+                        <option value="strings">Cuerdas</option>
+                        <option value="woodwinds">Madera</option>
+                        <option value="brass">Metal</option>
+                      </select>
+                    </div>
+                    {assignment && assignment.detectedInstrument && (
+                      <div className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+                        <Sparkles size={10} className="text-indigo-400" />
+                        <span>{assignment.detectedInstrument}</span>
+                        {assignment.instrumentFamily && (
+                          <span className="text-gray-600">({getFamilyDisplayName(assignment.instrumentFamily)})</span>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  <div className="flex items-center gap-1 mt-1">
-                    <span className={`text-xs px-1.5 py-0.5 rounded ${track.isPercussion ? 'bg-orange-900 text-orange-300' : 'bg-gray-700 text-gray-400'}`}>
-                      Ch {track.channel + 1}
-                    </span>
-                    <select
-                      value={track.role}
-                      onChange={e => toggleTrackRole(idx, e.target.value)}
-                      className="text-xs bg-gray-700 border-0 rounded px-1 py-0.5 text-gray-300 flex-1"
-                      onClick={e => e.stopPropagation()}
-                    >
-                      <option value="unassigned">Sin asignar</option>
-                      <option value="percussion">Percusión</option>
-                      <option value="bass">Bajo</option>
-                      <option value="harmony">Armonía</option>
-                      <option value="melody">Melodía</option>
-                      <option value="strings">Cuerdas</option>
-                      <option value="woodwinds">Madera</option>
-                      <option value="brass">Metal</option>
-                    </select>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
             
             {/* Project info */}
