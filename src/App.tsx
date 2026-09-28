@@ -4,11 +4,19 @@ import { quantizeProject } from './midi/quantize';
 import { writeMidiFile, verifyMidiExport, generateReport, generateJsonReport } from './midi/writer';
 import { MidiProject, QuantizeConfig } from './midi/model';
 import { audioEngine } from './audio/engine';
+import { metronome } from './audio/metronome';
 import { saveProject, loadProject, loadAllProjects, deleteProject, pushHistory, undo, redo, canUndo, canRedo, clearHistory, saveVersion } from './store/project';
-import { Upload, Play, Pause, Square, Download, Undo2, Redo2, Settings, Music, AlertTriangle, CheckCircle, Info, X, ChevronRight, Layers, Grid3X3, Volume2, Save, FolderOpen, Trash2, FileAudio, ZoomIn, ZoomOut, SkipBack, SkipForward } from 'lucide-react';
+import { EXAMPLES, getExamplesByCategory } from './midi/examples';
+import { getAllProfiles, applyProfileToProject, BUILT_IN_PROFILES } from './midi/profiles';
+import { runFullDiagnosis, EnhancedIssue, summarizeIssues } from './midi/diagnosis';
+import { transposeNotes, transposeOctave, divideNote, joinNotes, editVelocity, editNoteStart, editNoteEnd, moveNotes, duplicateFragment, toggleProtection, deleteNotes, normalizeVelocity } from './midi/editor';
+import { analyzePitchDistribution, analyzeRhythm, estimateKey, fullTrackAnalysis, getNoteName as analysisGetNoteName } from './midi/analysis';
+import { INSTRUMENT_CATALOG, getInstrumentByProgram, getInstrumentName, getAllFamilies } from './midi/instruments';
+import { getAllRecipes, executeRecipe, previewRecipe, Recipe } from './midi/recipes';
+import { Upload, Play, Pause, Square, Download, Undo2, Redo2, Settings, Music, AlertTriangle, CheckCircle, Info, X, ChevronRight, Layers, Grid3X3, Volume2, Save, FolderOpen, Trash2, FileAudio, ZoomIn, ZoomOut, SkipBack, SkipForward, BookOpen, Activity, Mic2, Wand2, ListChecks, BarChart3, Piano, HelpCircle, Copy, ArrowUpDown, Scissors, Link2, Move, Shield, Type } from 'lucide-react';
 
-type View = 'welcome' | 'project' | 'projects-list';
-type Tab = 'diagnosis' | 'piano-roll' | 'bars' | 'quantize' | 'export';
+type View = 'welcome' | 'project' | 'projects-list' | 'examples' | 'help';
+type Tab = 'diagnosis' | 'piano-roll' | 'bars' | 'quantize' | 'editor' | 'analysis' | 'instruments' | 'recipes' | 'export';
 
 function App() {
   const [view, setView] = useState<View>('welcome');
@@ -25,6 +33,13 @@ function App() {
   const [comparisonMode, setComparisonMode] = useState<'corrected' | 'original'>('corrected');
   const [volume, setVolume] = useState(0.5);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const [diagnosisIssues, setDiagnosisIssues] = useState<EnhancedIssue[]>([]);
+  const [metronomeOn, setMetronomeOn] = useState(false);
+  const [metronomeBpm, setMetronomeBpm] = useState(120);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
+  const [trackMutes, setTrackMutes] = useState<Set<number>>(new Set());
+  const [trackSolos, setTrackSolos] = useState<Set<number>>(new Set());
+  const [editorMessage, setEditorMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pianoRollRef = useRef<HTMLCanvasElement>(null);
 
@@ -136,18 +151,27 @@ function App() {
     if (!project) return;
     if (isPlaying) {
       audioEngine.stop();
+      metronome.stop();
       setIsPlaying(false);
     } else {
       audioEngine.setProject(project);
       audioEngine.setUseCorrected(comparisonMode === 'corrected');
       audioEngine.setVolume(volume);
       await audioEngine.play(currentTick);
+      if (metronomeOn) {
+        metronome.setBPM(metronomeBpm);
+        if (project.timeSignatures[0]) {
+          metronome.setTimeSignature(project.timeSignatures[0].numerator, project.timeSignatures[0].denominator);
+        }
+        metronome.start();
+      }
       setIsPlaying(true);
     }
   };
 
   const handleStop = () => {
     audioEngine.stop();
+    metronome.stop();
     setIsPlaying(false);
     setCurrentTick(0);
   };
@@ -477,6 +501,26 @@ function App() {
                   onChange={e => { setVolume(parseFloat(e.target.value)); audioEngine.setVolume(parseFloat(e.target.value)); }}
                   className="w-20 h-1 accent-indigo-500" />
               </div>
+              <div className="flex items-center gap-1 ml-2">
+                <button
+                  onClick={() => setMetronomeOn(!metronomeOn)}
+                  className={`p-1 rounded text-xs ${metronomeOn ? 'bg-amber-600 text-white' : 'bg-gray-700 text-gray-400'}`}
+                  title="Metrónomo"
+                >
+                  <Mic2 size={12} />
+                </button>
+                {metronomeOn && (
+                  <input
+                    type="number"
+                    min={20}
+                    max={300}
+                    value={metronomeBpm}
+                    onChange={e => setMetronomeBpm(parseInt(e.target.value) || 120)}
+                    className="w-12 bg-gray-700 rounded px-1 py-0.5 text-xs"
+                    title="BPM del metrónomo"
+                  />
+                )}
+              </div>
               <div className="w-px h-6 bg-gray-600 mx-1" />
               <button onClick={handleSaveVersion} className="px-3 py-1.5 text-sm bg-indigo-600 hover:bg-indigo-700 rounded flex items-center gap-1">
                 <Save size={14} /> Guardar versión
@@ -496,6 +540,12 @@ function App() {
               <Upload size={14} /> Subir MIDI
             </button>
           )}
+          <button onClick={() => setView('examples')} className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 rounded flex items-center gap-1">
+            <BookOpen size={14} /> Ejemplos
+          </button>
+          <button onClick={() => setView('help')} className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 rounded flex items-center gap-1">
+            <HelpCircle size={14} /> Ayuda
+          </button>
         </div>
       </header>
 
@@ -504,6 +554,8 @@ function App() {
       {/* Main content */}
       {view === 'welcome' && <WelcomeView onUpload={() => fileInputRef.current?.click()} onOpenProjects={() => { setView('projects-list'); refreshProjectsList(); }} />}
       {view === 'projects-list' && <ProjectsListView projects={projectsList} onOpen={handleOpenProject} onDelete={handleDeleteProject} onNew={() => fileInputRef.current?.click()} />}
+      {view === 'examples' && <ExamplesView onLoadExample={(p) => { setProject(p); saveProject(p); setView('project'); setActiveTab('diagnosis'); clearHistory(); notify(`Ejemplo cargado: ${p.name}`, 'success'); }} />}
+      {view === 'help' && <HelpView onClose={() => setView(project ? 'project' : 'welcome')} />}
       {view === 'project' && project && (
         <div className="flex flex-1 overflow-hidden">
           {/* Sidebar - Track list */}
@@ -582,6 +634,10 @@ function App() {
                 { id: 'piano-roll' as Tab, label: 'Piano Roll', icon: Grid3X3 },
                 { id: 'bars' as Tab, label: 'Por compases', icon: Grid3X3 },
                 { id: 'quantize' as Tab, label: 'Cuantización', icon: Settings },
+                { id: 'editor' as Tab, label: 'Editor', icon: Scissors },
+                { id: 'analysis' as Tab, label: 'Análisis', icon: BarChart3 },
+                { id: 'instruments' as Tab, label: 'Instrumentos', icon: Piano },
+                { id: 'recipes' as Tab, label: 'Recetas', icon: Wand2 },
                 { id: 'export' as Tab, label: 'Exportar', icon: Download },
               ].map(tab => (
                 <button
@@ -601,7 +657,7 @@ function App() {
 
             {/* Tab content */}
             <div className="flex-1 overflow-auto p-4">
-              {activeTab === 'diagnosis' && <DiagnosisView project={project} />}
+              {activeTab === 'diagnosis' && <DiagnosisView project={project} issues={diagnosisIssues} onRunDiagnosis={() => setDiagnosisIssues(runFullDiagnosis(project))} />}
               {activeTab === 'piano-roll' && (
                 <PianoRollView
                   project={project}
@@ -626,6 +682,24 @@ function App() {
                   onUndoQuantize={handleUndoQuantize}
                   onUpdateConfig={updateConfig}
                   result={quantizeResult}
+                />
+              )}
+              {activeTab === 'editor' && (
+                <EditorView
+                  project={project}
+                  selectedTrack={selectedTrack}
+                  selectedNotes={selectedNotes}
+                  setSelectedNotes={setSelectedNotes}
+                  onApply={(newProject, msg) => { pushHistory(project, 'Antes de edición'); setProject(newProject); saveProject(newProject); setEditorMessage(msg); setTimeout(() => setEditorMessage(null), 3000); }}
+                  editorMessage={editorMessage}
+                />
+              )}
+              {activeTab === 'analysis' && <AnalysisView project={project} selectedTrack={selectedTrack} />}
+              {activeTab === 'instruments' && <InstrumentsView project={project} selectedTrack={selectedTrack} />}
+              {activeTab === 'recipes' && (
+                <RecipesView
+                  project={project}
+                  onApply={(newProject) => { pushHistory(project, 'Antes de receta'); setProject(newProject); saveProject(newProject); notify('Receta aplicada', 'success'); }}
                 />
               )}
               {activeTab === 'export' && <ExportView project={project} onExport={handleExport} />}
@@ -721,7 +795,10 @@ function ProjectsListView({ projects, onOpen, onDelete, onNew }: { projects: Mid
 }
 
 // Diagnosis View
-function DiagnosisView({ project }: { project: MidiProject }) {
+function DiagnosisView({ project, issues, onRunDiagnosis }: { project: MidiProject; issues: EnhancedIssue[]; onRunDiagnosis: () => void }) {
+  const displayIssues = issues.length > 0 ? issues : [];
+  const summary = issues.length > 0 ? summarizeIssues(issues) : {};
+  
   const severityIcon = (severity: string) => {
     switch (severity) {
       case 'critical': return <X className="text-red-400" size={14} />;
@@ -765,9 +842,61 @@ function DiagnosisView({ project }: { project: MidiProject }) {
         </div>
       )}
 
+      {/* Enhanced diagnosis */}
+      <div className="bg-gray-800 rounded-lg p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+            <Activity size={18} /> Centro de diagnóstico musical
+          </h3>
+          <button onClick={onRunDiagnosis} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 rounded text-sm flex items-center gap-1">
+            <Activity size={14} /> Ejecutar diagnóstico
+          </button>
+        </div>
+        
+        {displayIssues.length > 0 && (
+          <>
+            <div className="grid grid-cols-4 gap-2 mb-3">
+              {Object.entries(summary).map(([cat, count]) => (
+                <div key={cat} className="bg-gray-700 rounded p-2 text-center">
+                  <p className="text-lg font-bold text-white">{count}</p>
+                  <p className="text-xs text-gray-400">{cat}</p>
+                </div>
+              ))}
+            </div>
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {displayIssues.slice(0, 20).map(issue => (
+                <div key={issue.id} className="bg-gray-700 rounded p-2 border-l-2 border-indigo-500">
+                  <div className="flex items-start gap-2">
+                    {severityIcon(issue.severity)}
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-white">{issue.title}</p>
+                      <p className="text-xs text-gray-300 mt-0.5">{issue.message}</p>
+                      <p className="text-xs text-gray-500 mt-1 italic">{issue.explanation}</p>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {issue.actions.map((action, i) => (
+                          <span key={i} className="text-xs bg-gray-600 px-1.5 py-0.5 rounded text-gray-300">{action}</span>
+                        ))}
+                      </div>
+                      {issue.barNumber && <span className="text-xs text-gray-500">Compás {issue.barNumber}</span>}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {displayIssues.length > 20 && (
+                <p className="text-xs text-gray-500 text-center">...y {displayIssues.length - 20} incidencias más</p>
+              )}
+            </div>
+          </>
+        )}
+        
+        {displayIssues.length === 0 && issues.length === 0 && (
+          <p className="text-sm text-gray-400">Pulsa "Ejecutar diagnóstico" para un análisis completo.</p>
+        )}
+      </div>
+
       {/* Issues list */}
       <div>
-        <h3 className="text-lg font-semibold text-white mb-3">Incidencias ({project.issues.length})</h3>
+        <h3 className="text-lg font-semibold text-white mb-3">Incidencias del archivo ({project.issues.length})</h3>
         {project.issues.length === 0 ? (
           <div className="bg-green-900/20 border border-green-700 rounded-lg p-4">
             <p className="text-green-300 flex items-center gap-2"><CheckCircle size={16} /> Sin incidencias detectadas.</p>
@@ -1264,6 +1393,702 @@ function getNoteName(pitch: number): string {
   const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
   const octave = Math.floor(pitch / 12) - 1;
   return `${names[pitch % 12]}${octave}`;
+}
+
+// Editor View
+function EditorView({ project, selectedTrack, selectedNotes, setSelectedNotes, onApply, editorMessage }: {
+  project: MidiProject;
+  selectedTrack: number;
+  selectedNotes: Set<string>;
+  setSelectedNotes: (s: Set<string>) => void;
+  onApply: (project: MidiProject, msg: string) => void;
+  editorMessage: string | null;
+}) {
+  const [semitones, setSemitones] = useState(0);
+  const [octaves, setOctaves] = useState(0);
+  const [divisions, setDivisions] = useState(2);
+  const [newVelocity, setNewVelocity] = useState(80);
+  const [moveOffset, setMoveOffset] = useState(0);
+  const [dupOffset, setDupOffset] = useState(480);
+  const [velMin, setVelMin] = useState(40);
+  const [velMax, setVelMax] = useState(120);
+  
+  const track = project.tracks[selectedTrack];
+  if (!track) return <p className="text-gray-400">Selecciona una pista.</p>;
+  
+  const handleTranspose = () => {
+    if (selectedNotes.size === 0) return;
+    const result = transposeNotes(project, selectedTrack, selectedNotes, semitones);
+    onApply(result.project, result.description);
+  };
+  
+  const handleTransposeOctave = () => {
+    if (selectedNotes.size === 0) return;
+    const result = transposeOctave(project, selectedTrack, selectedNotes, octaves);
+    onApply(result.project, result.description);
+  };
+  
+  const handleDivide = () => {
+    if (selectedNotes.size !== 1) return;
+    const noteId = Array.from(selectedNotes)[0];
+    const result = divideNote(project, selectedTrack, noteId, divisions);
+    onApply(result.project, result.description);
+    setSelectedNotes(new Set());
+  };
+  
+  const handleJoin = () => {
+    if (selectedNotes.size < 2) return;
+    const result = joinNotes(project, selectedTrack, Array.from(selectedNotes));
+    onApply(result.project, result.description);
+    setSelectedNotes(new Set());
+  };
+  
+  const handleEditVelocity = () => {
+    if (selectedNotes.size === 0) return;
+    const result = editVelocity(project, selectedTrack, selectedNotes, newVelocity);
+    onApply(result.project, result.description);
+  };
+  
+  const handleMove = () => {
+    if (selectedNotes.size === 0) return;
+    const result = moveNotes(project, selectedTrack, selectedNotes, moveOffset);
+    onApply(result.project, result.description);
+  };
+  
+  const handleDuplicate = () => {
+    if (selectedNotes.size === 0) return;
+    const result = duplicateFragment(project, selectedTrack, selectedNotes, dupOffset);
+    onApply(result.project, result.description);
+  };
+  
+  const handleProtect = () => {
+    if (selectedNotes.size === 0) return;
+    const result = toggleProtection(project, selectedTrack, selectedNotes, true);
+    onApply(result.project, result.description);
+  };
+  
+  const handleNormalizeVel = () => {
+    if (selectedNotes.size === 0) return;
+    const result = normalizeVelocity(project, selectedTrack, selectedNotes, velMin, velMax);
+    onApply(result.project, result.description);
+  };
+  
+  const handleDelete = () => {
+    if (selectedNotes.size === 0) return;
+    if (!confirm(`¿Eliminar ${selectedNotes.size} notas? Esta acción se puede deshacer.`)) return;
+    const result = deleteNotes(project, selectedTrack, selectedNotes);
+    onApply(result.project, result.description);
+    setSelectedNotes(new Set());
+  };
+  
+  return (
+    <div className="space-y-4 max-w-4xl">
+      <div className="bg-gray-800 rounded-lg p-4">
+        <h3 className="text-lg font-semibold text-white mb-2 flex items-center gap-2">
+          <Scissors size={18} /> Editor musical
+        </h3>
+        <p className="text-sm text-gray-400 mb-4">
+          Selecciona notas en el Piano Roll para editarlas. Las transformaciones afectan solo a la selección.
+        </p>
+        
+        {editorMessage && (
+          <div className="bg-emerald-900/30 border border-emerald-700 rounded p-2 mb-4">
+            <p className="text-sm text-emerald-300">{editorMessage}</p>
+          </div>
+        )}
+        
+        <div className="bg-blue-900/20 border border-blue-700 rounded p-2 mb-4">
+          <p className="text-xs text-blue-300">
+            <Info size={12} className="inline mr-1" />
+            Seleccionadas: {selectedNotes.size} notas en pista "{track.name}"
+          </p>
+        </div>
+        
+        <div className="grid grid-cols-2 gap-4">
+          {/* Transposition */}
+          <div className="bg-gray-700 rounded p-3">
+            <h4 className="text-sm font-semibold text-white mb-2 flex items-center gap-1"><ArrowUpDown size={14} /> Transposición</h4>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-400 w-20">Semitonos:</label>
+                <input type="number" value={semitones} onChange={e => setSemitones(parseInt(e.target.value) || 0)} className="w-20 bg-gray-600 rounded px-2 py-1 text-sm" />
+                <button onClick={handleTranspose} disabled={selectedNotes.size === 0} className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 rounded text-xs disabled:opacity-50">Aplicar</button>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-400 w-20">Octavas:</label>
+                <input type="number" value={octaves} onChange={e => setOctaves(parseInt(e.target.value) || 0)} className="w-20 bg-gray-600 rounded px-2 py-1 text-sm" />
+                <button onClick={handleTransposeOctave} disabled={selectedNotes.size === 0} className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 rounded text-xs disabled:opacity-50">Aplicar</button>
+              </div>
+            </div>
+          </div>
+          
+          {/* Division/Join */}
+          <div className="bg-gray-700 rounded p-3">
+            <h4 className="text-sm font-semibold text-white mb-2 flex items-center gap-1"><Scissors size={14} /> Dividir / Unir</h4>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-400 w-20">Divisiones:</label>
+                <input type="number" min={2} max={8} value={divisions} onChange={e => setDivisions(parseInt(e.target.value) || 2)} className="w-20 bg-gray-600 rounded px-2 py-1 text-sm" />
+                <button onClick={handleDivide} disabled={selectedNotes.size !== 1} className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 rounded text-xs disabled:opacity-50">Dividir</button>
+              </div>
+              <button onClick={handleJoin} disabled={selectedNotes.size < 2} className="w-full px-2 py-1 bg-indigo-600 hover:bg-indigo-700 rounded text-xs disabled:opacity-50 flex items-center gap-1 justify-center">
+                <Link2 size={12} /> Unir notas seleccionadas
+              </button>
+            </div>
+          </div>
+          
+          {/* Move */}
+          <div className="bg-gray-700 rounded p-3">
+            <h4 className="text-sm font-semibold text-white mb-2 flex items-center gap-1"><Move size={14} /> Desplazar</h4>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-gray-400 w-20">Ticks:</label>
+              <input type="number" value={moveOffset} onChange={e => setMoveOffset(parseInt(e.target.value) || 0)} className="w-24 bg-gray-600 rounded px-2 py-1 text-sm" />
+              <button onClick={handleMove} disabled={selectedNotes.size === 0} className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 rounded text-xs disabled:opacity-50">Mover</button>
+            </div>
+          </div>
+          
+          {/* Duplicate */}
+          <div className="bg-gray-700 rounded p-3">
+            <h4 className="text-sm font-semibold text-white mb-2 flex items-center gap-1"><Copy size={14} /> Duplicar</h4>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-gray-400 w-20">Offset:</label>
+              <input type="number" value={dupOffset} onChange={e => setDupOffset(parseInt(e.target.value) || 0)} className="w-24 bg-gray-600 rounded px-2 py-1 text-sm" />
+              <button onClick={handleDuplicate} disabled={selectedNotes.size === 0} className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 rounded text-xs disabled:opacity-50">Duplicar</button>
+            </div>
+          </div>
+          
+          {/* Velocity */}
+          <div className="bg-gray-700 rounded p-3">
+            <h4 className="text-sm font-semibold text-white mb-2 flex items-center gap-1"><Type size={14} /> Velocidad</h4>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-400 w-20">Valor:</label>
+                <input type="number" min={1} max={127} value={newVelocity} onChange={e => setNewVelocity(parseInt(e.target.value) || 80)} className="w-20 bg-gray-600 rounded px-2 py-1 text-sm" />
+                <button onClick={handleEditVelocity} disabled={selectedNotes.size === 0} className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 rounded text-xs disabled:opacity-50">Fijar</button>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-400 w-20">Rango:</label>
+                <input type="number" min={1} max={127} value={velMin} onChange={e => setVelMin(parseInt(e.target.value) || 40)} className="w-14 bg-gray-600 rounded px-2 py-1 text-sm" />
+                <span className="text-xs text-gray-400">a</span>
+                <input type="number" min={1} max={127} value={velMax} onChange={e => setVelMax(parseInt(e.target.value) || 120)} className="w-14 bg-gray-600 rounded px-2 py-1 text-sm" />
+                <button onClick={handleNormalizeVel} disabled={selectedNotes.size === 0} className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 rounded text-xs disabled:opacity-50">Norm.</button>
+              </div>
+            </div>
+          </div>
+          
+          {/* Protection/Delete */}
+          <div className="bg-gray-700 rounded p-3">
+            <h4 className="text-sm font-semibold text-white mb-2 flex items-center gap-1"><Shield size={14} /> Protección</h4>
+            <div className="space-y-2">
+              <button onClick={handleProtect} disabled={selectedNotes.size === 0} className="w-full px-2 py-1 bg-amber-600 hover:bg-amber-700 rounded text-xs disabled:opacity-50 flex items-center gap-1 justify-center">
+                <Shield size={12} /> Proteger selección
+              </button>
+              <button onClick={handleDelete} disabled={selectedNotes.size === 0} className="w-full px-2 py-1 bg-red-600 hover:bg-red-700 rounded text-xs disabled:opacity-50 flex items-center gap-1 justify-center">
+                <Trash2 size={12} /> Eliminar selección
+              </button>
+            </div>
+          </div>
+        </div>
+        
+        {/* Help */}
+        <div className="mt-4 bg-gray-700 rounded p-3">
+          <h4 className="text-sm font-semibold text-white mb-2 flex items-center gap-1"><HelpCircle size={14} /> Ayuda del editor</h4>
+          <ul className="text-xs text-gray-400 space-y-1">
+            <li>• <strong>Seleccionar notas:</strong> clic en el Piano Roll (Shift+clic para múltiple)</li>
+            <li>• <strong>Transposición:</strong> cambia la altura sin alterar el ritmo</li>
+            <li>• <strong>Dividir:</strong> parte una nota en N partes iguales</li>
+            <li>• <strong>Unir:</strong> fusiona notas consecutivas de igual altura</li>
+            <li>• <strong>Proteger:</strong> las notas protegidas no se modifican en cuantizaciones posteriores</li>
+            <li>• Todas las operaciones se pueden deshacer con Ctrl+Z</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Analysis View
+function AnalysisView({ project, selectedTrack }: { project: MidiProject; selectedTrack: number }) {
+  const track = project.tracks[selectedTrack];
+  if (!track || track.notes.length === 0) return <p className="text-gray-400">Selecciona una pista con notas para analizar.</p>;
+  
+  const pitchDist = analyzePitchDistribution(track);
+  const rhythm = analyzeRhythm(track, project);
+  const keyEst = estimateKey(track);
+  
+  return (
+    <div className="space-y-4 max-w-4xl">
+      <div className="bg-gray-800 rounded-lg p-4">
+        <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+          <BarChart3 size={18} /> Análisis musical — {track.name}
+        </h3>
+        
+        <div className="grid grid-cols-2 gap-4">
+          {/* Pitch Distribution */}
+          <div className="bg-gray-700 rounded p-3">
+            <h4 className="text-sm font-semibold text-indigo-300 mb-2">Distribución de alturas</h4>
+            <div className="space-y-1 text-xs text-gray-300">
+              <p>Mínimo: {analysisGetNoteName(pitchDist.min)} ({pitchDist.min})</p>
+              <p>Máximo: {analysisGetNoteName(pitchDist.max)} ({pitchDist.max})</p>
+              <p>Media: {analysisGetNoteName(Math.round(pitchDist.mean))} ({pitchDist.mean.toFixed(1)})</p>
+              <p>Mediana: {analysisGetNoteName(pitchDist.median)}</p>
+              <p>Moda: {analysisGetNoteName(pitchDist.mode)}</p>
+              <p>Extensión: {pitchDist.range} semitonos</p>
+            </div>
+          </div>
+          
+          {/* Rhythm */}
+          <div className="bg-gray-700 rounded p-3">
+            <h4 className="text-sm font-semibold text-emerald-300 mb-2">Análisis rítmico</h4>
+            <div className="space-y-1 text-xs text-gray-300">
+              <p>Duración media: {rhythm.avgDuration.toFixed(0)} ticks</p>
+              <p>Duración mínima: {rhythm.minDuration} ticks</p>
+              <p>Duración máxima: {rhythm.maxDuration} ticks</p>
+              <p>Densidad media: {(rhythm.densityPerBar.reduce((a, b) => a + b, 0) / rhythm.densityPerBar.length).toFixed(1)} notas/compás</p>
+              <p>Desviación media: {rhythm.avgDisplacement.toFixed(1)} ticks</p>
+              <p>Desviación máxima: {rhythm.maxDisplacement} ticks</p>
+            </div>
+          </div>
+          
+          {/* Key estimation */}
+          <div className="bg-gray-700 rounded p-3 col-span-2">
+            <h4 className="text-sm font-semibold text-amber-300 mb-2">Estimación de tonalidad</h4>
+            {keyEst ? (
+              <div className="space-y-1">
+                <p className="text-sm text-white">
+                  Tonalidad estimada: <strong>{keyEst.key} {keyEst.scale === 'major' ? 'mayor' : 'menor'}</strong>
+                </p>
+                <p className="text-xs text-gray-400">Confianza: {keyEst.confidence}</p>
+                <p className="text-xs text-gray-400 italic">{keyEst.evidence}</p>
+                <p className="text-xs text-gray-500 mt-2">
+                  Nota: Esta estimación se basa en el perfil de Krumhansl-Schmuckler. Es orientativa y puede no coincidir con la tonalidad real de la obra, especialmente en música modal, atonal o con modulaciones frecuentes.
+                </p>
+                {/* Pitch class distribution */}
+                <div className="flex gap-1 mt-2">
+                  {keyEst.pitchClassDistribution.map((count, i) => (
+                    <div key={i} className="flex-1 flex flex-col items-center">
+                      <div className="w-full bg-indigo-600 rounded-t" style={{ height: `${(count / Math.max(...keyEst.pitchClassDistribution)) * 40}px` }}></div>
+                      <span className="text-[9px] text-gray-500 mt-0.5">{['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'][i]}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-400">No hay suficientes notas para estimar la tonalidad (mínimo 8).</p>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Instruments View
+function InstrumentsView({ project, selectedTrack }: { project: MidiProject; selectedTrack: number }) {
+  const [filterFamily, setFilterFamily] = useState<string>('all');
+  const families = getAllFamilies();
+  
+  const filteredInstruments = filterFamily === 'all' 
+    ? INSTRUMENT_CATALOG 
+    : INSTRUMENT_CATALOG.filter(i => i.family === filterFamily);
+  
+  const currentTrack = project.tracks[selectedTrack];
+  const currentInstrument = currentTrack?.program !== undefined ? getInstrumentByProgram(currentTrack.program) : null;
+  
+  return (
+    <div className="space-y-4 max-w-4xl">
+      <div className="bg-gray-800 rounded-lg p-4">
+        <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+          <Piano size={18} /> Catálogo de instrumentos
+        </h3>
+        
+        {currentTrack && (
+          <div className="bg-indigo-900/30 border border-indigo-700 rounded p-3 mb-4">
+            <p className="text-sm text-indigo-300">
+              Pista actual: <strong>{currentTrack.name}</strong>
+              {currentInstrument && (
+                <> — {currentInstrument.name} ({currentInstrument.family})
+                {currentInstrument.isTransposing && ` · Transpositor: ${currentInstrument.writtenToConcert > 0 ? '+' : ''}${currentInstrument.writtenToConcert} semitonos`}
+                · Registro: {analysisGetNoteName(currentInstrument.minPitch)}–{analysisGetNoteName(currentInstrument.maxPitch)}
+                </>
+              )}
+              {!currentInstrument && currentTrack.program !== undefined && ` — Programa ${currentTrack.program}`}
+              {currentTrack.isPercussion && ' — Percusión (canal 10)'}
+            </p>
+          </div>
+        )}
+        
+        <div className="flex items-center gap-2 mb-3">
+          <label className="text-sm text-gray-400">Familia:</label>
+          <select value={filterFamily} onChange={e => setFilterFamily(e.target.value)} className="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm">
+            <option value="all">Todas</option>
+            {families.map(f => <option key={f} value={f}>{f}</option>)}
+          </select>
+        </div>
+        
+        <div className="max-h-96 overflow-y-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-gray-700 sticky top-0">
+              <tr>
+                <th className="text-left p-2 text-gray-300">Prog.</th>
+                <th className="text-left p-2 text-gray-300">Nombre</th>
+                <th className="text-left p-2 text-gray-300">Familia</th>
+                <th className="text-left p-2 text-gray-300">Transp.</th>
+                <th className="text-left p-2 text-gray-300">Registro</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredInstruments.map(inst => (
+                <tr key={inst.program} className={`border-t border-gray-700 ${currentTrack?.program === inst.program ? 'bg-indigo-900/30' : 'hover:bg-gray-700'}`}>
+                  <td className="p-2 text-gray-400">{inst.program}</td>
+                  <td className="p-2 text-white">{inst.name}</td>
+                  <td className="p-2 text-gray-400">{inst.family}</td>
+                  <td className="p-2 text-gray-400">
+                    {inst.isTransposing ? `${inst.writtenToConcert > 0 ? '+' : ''}${inst.writtenToConcert}` : '—'}
+                  </td>
+                  <td className="p-2 text-gray-400">{analysisGetNoteName(inst.minPitch)}–{analysisGetNoteName(inst.maxPitch)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        
+        <div className="mt-4 bg-gray-700 rounded p-3">
+          <h4 className="text-sm font-semibold text-white mb-2 flex items-center gap-1"><HelpCircle size={14} /> Sobre instrumentos transpositores</h4>
+          <ul className="text-xs text-gray-400 space-y-1">
+            <li>• Un instrumento transpositor suena a diferente altura de lo escrito</li>
+            <li>• Ej: Trompeta en Si♭ suena un tono abajo de lo escrito</li>
+            <li>• El cambio de timbre NO transpone las notas automáticamente</li>
+            <li>• La transposición visual no altera el MIDI exportado</li>
+            <li>• Para transponer realmente, usa el Editor → Transposición</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Recipes View
+function RecipesView({ project, onApply }: { project: MidiProject; onApply: (project: MidiProject) => void }) {
+  const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null);
+  const [preview, setPreview] = useState<{ steps: string[]; warnings: string[] } | null>(null);
+  const [result, setResult] = useState<{ stepResults: { step: any; result: string }[]; warnings: string[] } | null>(null);
+  
+  const recipes = getAllRecipes();
+  
+  const handleSelectRecipe = (recipe: Recipe) => {
+    setSelectedRecipe(recipe);
+    setPreview(previewRecipe(project, recipe));
+    setResult(null);
+  };
+  
+  const handleExecute = () => {
+    if (!selectedRecipe) return;
+    const execResult = executeRecipe(project, selectedRecipe);
+    setResult({ stepResults: execResult.stepResults, warnings: execResult.warnings });
+    onApply(execResult.project);
+  };
+  
+  return (
+    <div className="space-y-4 max-w-4xl">
+      <div className="bg-gray-800 rounded-lg p-4">
+        <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+          <Wand2 size={18} /> Recetas de procesamiento
+        </h3>
+        <p className="text-sm text-gray-400 mb-4">
+          Las recetas son cadenas de operaciones que se ejecutan en orden. Se pueden guardar y reutilizar.
+        </p>
+        
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          {recipes.map(recipe => (
+            <button
+              key={recipe.id}
+              onClick={() => handleSelectRecipe(recipe)}
+              className={`p-3 rounded-lg text-left border transition-colors ${
+                selectedRecipe?.id === recipe.id
+                  ? 'border-indigo-500 bg-indigo-900/30'
+                  : 'border-gray-600 hover:border-gray-500 bg-gray-700'
+              }`}
+            >
+              <span className="text-sm font-semibold text-white">{recipe.name}</span>
+              <p className="text-xs text-gray-400 mt-1">{recipe.description}</p>
+              <p className="text-xs text-gray-500 mt-1">{recipe.steps.length} pasos {recipe.isBuiltIn ? '(integrada)' : '(personalizada)'}</p>
+            </button>
+          ))}
+        </div>
+        
+        {preview && selectedRecipe && (
+          <div className="bg-gray-700 rounded p-3 mb-4">
+            <h4 className="text-sm font-semibold text-white mb-2">Vista previa: {selectedRecipe.name}</h4>
+            <ol className="space-y-1 mb-3">
+              {preview.steps.map((step, i) => (
+                <li key={i} className="text-xs text-gray-300 flex items-start gap-2">
+                  <span className="text-indigo-400 font-mono">{i + 1}.</span>
+                  <span>{step}</span>
+                </li>
+              ))}
+            </ol>
+            {preview.warnings.length > 0 && (
+              <div className="bg-amber-900/30 border border-amber-700 rounded p-2 mb-3">
+                {preview.warnings.map((w, i) => (
+                  <p key={i} className="text-xs text-amber-300">⚠ {w}</p>
+                ))}
+              </div>
+            )}
+            <button onClick={handleExecute} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 rounded text-sm flex items-center gap-2">
+              <Wand2 size={14} /> Ejecutar receta
+            </button>
+          </div>
+        )}
+        
+        {result && (
+          <div className="bg-emerald-900/30 border border-emerald-700 rounded p-3">
+            <h4 className="text-sm font-semibold text-emerald-300 mb-2">Resultado</h4>
+            {result.stepResults.map((sr, i) => (
+              <p key={i} className="text-xs text-gray-300">✓ {sr.step.label}: {sr.result}</p>
+            ))}
+            {result.warnings.length > 0 && (
+              <div className="mt-2">
+                {result.warnings.map((w, i) => (
+                  <p key={i} className="text-xs text-amber-300">⚠ {w}</p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Examples View
+function ExamplesView({ onLoadExample }: { onLoadExample: (p: MidiProject) => void }) {
+  const [filter, setFilter] = useState<'all' | 'didactic' | 'validation'>('all');
+  
+  const filtered = filter === 'all' ? EXAMPLES : getExamplesByCategory(filter);
+  
+  return (
+    <div className="flex-1 p-8 max-w-5xl mx-auto w-full">
+      <h2 className="text-2xl font-bold text-white mb-2 flex items-center gap-2">
+        <BookOpen size={24} /> Biblioteca de ejemplos
+      </h2>
+      <p className="text-gray-400 mb-6">
+        Ejemplos MIDI originales generados para la herramienta. Cada ejemplo tiene un objetivo específico y parámetros sugeridos.
+      </p>
+      
+      <div className="flex gap-2 mb-6">
+        <button onClick={() => setFilter('all')} className={`px-3 py-1.5 rounded text-sm ${filter === 'all' ? 'bg-indigo-600' : 'bg-gray-700 hover:bg-gray-600'}`}>Todos</button>
+        <button onClick={() => setFilter('didactic')} className={`px-3 py-1.5 rounded text-sm ${filter === 'didactic' ? 'bg-indigo-600' : 'bg-gray-700 hover:bg-gray-600'}`}>Didácticos</button>
+        <button onClick={() => setFilter('validation')} className={`px-3 py-1.5 rounded text-sm ${filter === 'validation' ? 'bg-indigo-600' : 'bg-gray-700 hover:bg-gray-600'}`}>Validación</button>
+      </div>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {filtered.map(example => (
+          <div key={example.id} className="bg-gray-800 rounded-lg p-4 border border-gray-700 hover:border-indigo-600 transition-colors">
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <h3 className="font-semibold text-white">{example.name}</h3>
+                <span className={`text-xs px-2 py-0.5 rounded ${example.category === 'didactic' ? 'bg-blue-900 text-blue-300' : 'bg-purple-900 text-purple-300'}`}>
+                  {example.category === 'didactic' ? 'Didáctico' : 'Validación'}
+                </span>
+              </div>
+              <button
+                onClick={() => onLoadExample(example.generate())}
+                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 rounded text-sm"
+              >
+                Cargar
+              </button>
+            </div>
+            <p className="text-sm text-gray-400 mt-2">{example.description}</p>
+            <p className="text-xs text-gray-500 mt-1"><strong>Objetivo:</strong> {example.objective}</p>
+            <p className="text-xs text-gray-500 mt-1"><strong>Rejilla:</strong> 1/{example.suggestedParams.gridDivision} · <strong>Modo:</strong> {example.suggestedParams.mode}</p>
+            <p className="text-xs text-emerald-400 mt-1"><strong>Resultado esperado:</strong> {example.expectedResult}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Help View
+function HelpView({ onClose }: { onClose: () => void }) {
+  const [activeSection, setActiveSection] = useState('intro');
+  
+  const sections = [
+    { id: 'intro', title: 'Introducción' },
+    { id: 'workflow', title: 'Flujo de trabajo' },
+    { id: 'quantize', title: 'Cuantización' },
+    { id: 'bars16', title: 'Las 16 posiciones' },
+    { id: 'editor', title: 'Editor' },
+    { id: 'tutorials', title: 'Tutoriales' },
+    { id: 'shortcuts', title: 'Atajos' },
+  ];
+  
+  return (
+    <div className="flex-1 p-8 max-w-5xl mx-auto w-full">
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+          <HelpCircle size={24} /> Ayuda
+        </h2>
+        <button onClick={onClose} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm">Cerrar</button>
+      </div>
+      
+      <div className="flex gap-6">
+        <nav className="w-48 flex-shrink-0">
+          {sections.map(s => (
+            <button
+              key={s.id}
+              onClick={() => setActiveSection(s.id)}
+              className={`block w-full text-left px-3 py-2 rounded text-sm mb-1 ${
+                activeSection === s.id ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800'
+              }`}
+            >
+              {s.title}
+            </button>
+          ))}
+        </nav>
+        
+        <div className="flex-1 bg-gray-800 rounded-lg p-6">
+          {activeSection === 'intro' && (
+            <div className="space-y-3 text-sm text-gray-300">
+              <h3 className="text-lg font-semibold text-white">¿Qué es MIDI Cuantizador?</h3>
+              <p>Una herramienta para analizar, cuantizar, revisar y exportar archivos MIDI con precisión musical.</p>
+              <p>La herramienta distingue tres tipos de operaciones:</p>
+              <ul className="list-disc list-inside space-y-1 ml-2">
+                <li><strong>Cuantización:</strong> ajustar tiempos a una rejilla definida</li>
+                <li><strong>Reparación:</strong> corregir errores técnicos verificables</li>
+                <li><strong>Reconstrucción asistida:</strong> proponer interpretaciones cuando la información es ambigua</li>
+              </ul>
+              <p className="bg-amber-900/30 border border-amber-700 rounded p-2 text-xs text-amber-200">
+                <strong>Importante:</strong> Nunca se presenta una reconstrucción incierta como una corrección demostrada. La precisión matemática de la rejilla no garantiza la fidelidad musical.
+              </p>
+            </div>
+          )}
+          
+          {activeSection === 'workflow' && (
+            <div className="space-y-3 text-sm text-gray-300">
+              <h3 className="text-lg font-semibold text-white">Flujo de trabajo</h3>
+              <ol className="list-decimal list-inside space-y-2">
+                <li><strong>Crear o abrir proyecto:</strong> sube un archivo MIDI o carga un ejemplo</li>
+                <li><strong>Consultar diagnóstico:</strong> revisa las incidencias detectadas</li>
+                <li><strong>Revisar instrumentos:</strong> asigna la función musical de cada pista</li>
+                <li><strong>Seleccionar pistas y compases:</strong> define el ámbito de trabajo</li>
+                <li><strong>Configurar cuantización:</strong> elige modo, rejilla e intensidad</li>
+                <li><strong>Procesar:</strong> aplica la cuantización</li>
+                <li><strong>Comparar:</strong> alterna entre original y corregido</li>
+                <li><strong>Resolver incidencias:</strong> revisa notas señaladas</li>
+                <li><strong>Aprobar versión:</strong> guarda el resultado</li>
+                <li><strong>Exportar:</strong> descarga MIDI e informes</li>
+              </ol>
+            </div>
+          )}
+          
+          {activeSection === 'quantize' && (
+            <div className="space-y-3 text-sm text-gray-300">
+              <h3 className="text-lg font-semibold text-white">Modos de cuantización</h3>
+              <div className="space-y-3">
+                <div className="bg-gray-700 rounded p-3">
+                  <h4 className="font-semibold text-indigo-300">ESTRICTO</h4>
+                  <p className="text-xs mt-1">Ajusta ataques exactamente a la rejilla seleccionada. Ideal para bases rítmicas y percusión.</p>
+                </div>
+                <div className="bg-gray-700 rounded p-3">
+                  <h4 className="font-semibold text-emerald-300">INTERPRETATIVO</h4>
+                  <p className="text-xs mt-1">Reduce desviaciones manteniendo una proporción de la expresión original. Ideal para melodías.</p>
+                </div>
+                <div className="bg-gray-700 rounded p-3">
+                  <h4 className="font-semibold text-amber-300">ASISTIDO</h4>
+                  <p className="text-xs mt-1">Propone opciones para fragmentos ambiguos y requiere revisión antes de aplicarlas.</p>
+                </div>
+              </div>
+              <p className="bg-blue-900/20 border border-blue-700 rounded p-2 text-xs text-blue-200">
+                Las notas que superen el desplazamiento máximo permitido quedarán sin modificar y señaladas.
+              </p>
+            </div>
+          )}
+          
+          {activeSection === 'bars16' && (
+            <div className="space-y-3 text-sm text-gray-300">
+              <h3 className="text-lg font-semibold text-white">Las 16 posiciones de un compás 4/4</h3>
+              <p>En un compás de 4/4 con rejilla de semicorcheas hay 16 posiciones posibles de inicio. Pero <strong>16 posiciones no significa 16 notas obligatorias</strong>.</p>
+              <div className="bg-gray-700 rounded p-3">
+                <p className="text-xs">Ejemplos:</p>
+                <ul className="list-disc list-inside text-xs mt-1 space-y-1">
+                  <li>Una blanca ocupa 8 posiciones pero es UN solo ataque</li>
+                  <li>Un silencio de negra ocupa 4 posiciones sin ningún ataque</li>
+                  <li>Un acorde de 4 notas en un pulso usa 1 posición para 4 ataques simultáneos</li>
+                  <li>4 semicorcheas usan 4 posiciones diferentes</li>
+                </ul>
+              </div>
+              <p className="bg-amber-900/30 border border-amber-700 rounded p-2 text-xs text-amber-200">
+                La plantilla por compases muestra las posiciones disponibles, no impone ataques en todas ellas.
+              </p>
+            </div>
+          )}
+          
+          {activeSection === 'editor' && (
+            <div className="space-y-3 text-sm text-gray-300">
+              <h3 className="text-lg font-semibold text-white">Editor musical</h3>
+              <p>El editor permite transformar notas seleccionadas sin afectar al resto de la obra.</p>
+              <ul className="list-disc list-inside space-y-1 ml-2">
+                <li><strong>Transposición:</strong> cambia alturas por semitonos u octavas</li>
+                <li><strong>División:</strong> parte una nota en N partes iguales</li>
+                <li><strong>Unión:</strong> fusiona notas consecutivas de igual altura</li>
+                <li><strong>Duplicación:</strong> copia un fragmento desplazado en el tiempo</li>
+                <li><strong>Edición de velocidad:</strong> ajusta dinámica individual o por rango</li>
+                <li><strong>Protección:</strong> marca notas para que no sean modificadas en cuantizaciones</li>
+              </ul>
+              <p className="text-xs text-gray-400 mt-2">
+                Todas las operaciones se pueden deshacer con el botón Deshacer.
+              </p>
+            </div>
+          )}
+          
+          {activeSection === 'tutorials' && (
+            <div className="space-y-3 text-sm text-gray-300">
+              <h3 className="text-lg font-semibold text-white">Tutoriales prácticos</h3>
+              <div className="space-y-3">
+                <div className="bg-gray-700 rounded p-3">
+                  <h4 className="font-semibold text-white">1. Corregir una melodía a semicorcheas</h4>
+                  <p className="text-xs mt-1">Carga el ejemplo "Semicorcheas regulares". Configura rejilla 1/16, modo estricto, fuerza 100%. Pulsa "Procesar cuantización". Verifica en el Piano Roll que todas las notas están alineadas.</p>
+                </div>
+                <div className="bg-gray-700 rounded p-3">
+                  <h4 className="font-semibold text-white">2. Conservar acordes</h4>
+                  <p className="text-xs mt-1">Carga "Acordes simultáneos". Los acordes ya están simultáneos. La cuantización estricta los mantiene así porque todos los ataques están en la misma posición. Verifica en la vista por compases.</p>
+                </div>
+                <div className="bg-gray-700 rounded p-3">
+                  <h4 className="font-semibold text-white">3. Trabajar con tresillos</h4>
+                  <p className="text-xs mt-1">Carga "Tresillos". Activa la opción "Incluir tresillos" en la configuración. Usa rejilla de corcheas. Los tresillos se cuantizan a su rejilla ternaria propia.</p>
+                </div>
+                <div className="bg-gray-700 rounded p-3">
+                  <h4 className="font-semibold text-white">4. Revisar clusters</h4>
+                  <p className="text-xs mt-1">Carga "Clusters ambiguos". Ejecuta el diagnóstico. Las notas aparecerán señaladas. Usa el modo asistido para que se propongan opciones sin aplicarlas automáticamente.</p>
+                </div>
+                <div className="bg-gray-700 rounded p-3">
+                  <h4 className="font-semibold text-white">5. Comparar original y resultado</h4>
+                  <p className="text-xs mt-1">Tras cuantizar, usa los botones "Original" y "Corregido" en el Piano Roll para alternar. Las notas modificadas aparecen en verde. Reproduce ambos para comparar.</p>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {activeSection === 'shortcuts' && (
+            <div className="space-y-3 text-sm text-gray-300">
+              <h3 className="text-lg font-semibold text-white">Atajos de teclado</h3>
+              <table className="w-full text-xs">
+                <tbody>
+                  <tr className="border-b border-gray-700"><td className="py-1 text-gray-400">Espacio</td><td>Reproducir / Pausar</td></tr>
+                  <tr className="border-b border-gray-700"><td className="py-1 text-gray-400">Escape</td><td>Detener reproducción</td></tr>
+                  <tr className="border-b border-gray-700"><td className="py-1 text-gray-400">Clic en Piano Roll</td><td>Seleccionar nota</td></tr>
+                  <tr className="border-b border-gray-700"><td className="py-1 text-gray-400">Shift+Clic</td><td>Selección múltiple</td></tr>
+                  <tr className="border-b border-gray-700"><td className="py-1 text-gray-400">Clic en espacio vacío</td><td>Mover cabezal de reproducción</td></tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default App;
