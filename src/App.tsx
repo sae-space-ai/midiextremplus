@@ -16,6 +16,7 @@ import { getAllRecipes, executeRecipe, previewRecipe, Recipe } from './midi/reci
 import { processWithMMC, runAllTests, MMCProject as MMCProjectType, generateExportSummary, verifyBeforeExport } from './mmc';
 import { extractScoreAndParts, exportFullScoreToMusicXML, exportPartToMusicXMLString, downloadMusicXML, runAllScoreTests, Score as ScoreType, IndividualPart as IndividualPartType, ExtractionResult as ExtractionResultType } from './score';
 import { runSovereignAutocorrection, SAEResult, AutocorrectReport, AnalysisProgress } from './sae';
+import { DependencyResolver, PipelineProgress } from './pipeline';
 import { autoAssignTracks, applyAssignments, TrackAssignment, getFamilyDisplayName } from './atae';
 import { Upload, Play, Pause, Square, Download, Undo2, Redo2, Settings, Music, AlertTriangle, CheckCircle, Info, X, ChevronRight, Layers, Grid3X3, Volume2, Save, FolderOpen, Trash2, FileAudio, ZoomIn, ZoomOut, SkipBack, SkipForward, BookOpen, Activity, Mic2, Wand2, ListChecks, BarChart3, Piano, HelpCircle, Copy, ArrowUpDown, Scissors, Link2, Move, Shield, Type, Database, TestTube, FileMusic, Users, Zap, Sparkles } from 'lucide-react';
 
@@ -782,11 +783,14 @@ function App() {
                 <ScoreView
                   project={project}
                   mmcProject={mmcProject}
+                  setMmcProject={setMmcProject}
                   extractionResult={extractionResult}
                   setExtractionResult={setExtractionResult}
                   scoreProcessing={scoreProcessing}
                   setScoreProcessing={setScoreProcessing}
                   notify={notify}
+                  setProject={setProject}
+                  saveProject={saveProject}
                 />
               )}
               {activeTab === 'sae' && (
@@ -2337,68 +2341,69 @@ function MMCView({ project, mmcProject, setMmcProject, mmcProcessing, setMmcProc
 }
 
 // Score & Parts View
-function ScoreView({ project, mmcProject, extractionResult, setExtractionResult, scoreProcessing, setScoreProcessing, notify }: {
+function ScoreView({ project, mmcProject, setMmcProject, extractionResult, setExtractionResult, scoreProcessing, setScoreProcessing, notify, setProject, saveProject }: {
   project: MidiProject;
   mmcProject: MMCProjectType | null;
+  setMmcProject: (m: MMCProjectType | null) => void;
   extractionResult: ExtractionResultType | null;
   setExtractionResult: (r: ExtractionResultType | null) => void;
   scoreProcessing: boolean;
   setScoreProcessing: (p: boolean) => void;
   notify: (msg: string, type: 'success' | 'error' | 'info') => void;
+  setProject: (p: MidiProject) => void;
+  saveProject: (p: MidiProject) => void;
 }) {
   const [scoreTests, setScoreTests] = useState<{ name: string; passed: boolean; message: string }[] | null>(null);
+  const [pipelineProgress, setPipelineProgress] = useState<PipelineProgress | null>(null);
 
-  const handleExtractScoreAndParts = () => {
-    if (!mmcProject) {
-      notify('Primero debes construir la MMC', 'error');
-      return;
-    }
-
+  const handleExtractScoreAndParts = async () => {
     setScoreProcessing(true);
-    setTimeout(() => {
-      try {
-        const metadata = {
-          title: project.name,
-          subtitle: null,
-          composer: null,
-          arranger: null,
-          lyricist: null,
-          copyright: null,
-          movementNumber: null,
-          movementTitle: null,
-          workNumber: null,
-          opus: null,
-          source: null,
-          encoding_date: new Date().toISOString(),
-          encoder: 'MIDIExtremPlus MMC v1.0',
-          description: null,
-        };
+    setPipelineProgress({ stage: 'CHECK_SOURCE', message: 'Iniciando pipeline...', percent: 0 });
 
-        const structure = {
-          segno_measure: null,
-          coda_measure: null,
-          fine_measure: null,
-          dacapo: false,
-          dalsegno: false,
-          tocoda: null,
-          repeat_starts: [],
-          repeat_ends: [],
-          endings: [],
-        };
+    try {
+      const resolver = new DependencyResolver(project);
+      resolver.setProgressCallback((progress) => {
+        setPipelineProgress(progress);
+      });
 
-        const result = extractScoreAndParts(mmcProject, metadata, structure);
-        setExtractionResult(result);
-        notify(`Score y ${result.parts.length} particellas extraídas`, 'success');
-      } catch (e) {
-        notify(`Error al extraer: ${(e as Error).message}`, 'error');
+      const result = await resolver.execute();
+
+      if (result.success) {
+        // Update state with all results
+        setMmcProject(result.mmc);
+        setProject(result.project);
+        saveProject(result.project);
+        setExtractionResult(result.extractionResult);
+        
+        const assignedCount = result.assignments.filter(a => a.assignmentConfidence !== 'REVIEW').length;
+        notify(
+          `Pipeline completado: ${assignedCount} pistas asignadas, ${result.extractionResult.parts.length} particellas generadas`,
+          'success'
+        );
+      } else {
+        notify(`Error en el pipeline: ${result.error}`, 'error');
       }
+    } catch (e) {
+      notify(`Error en el pipeline: ${(e as Error).message}`, 'error');
+    } finally {
       setScoreProcessing(false);
-    }, 100);
+      setPipelineProgress(null);
+    }
   };
 
-  const handleExportFullScore = () => {
+  const handleExportFullScore = async () => {
+    // If no extraction result, run the full pipeline first
     if (!extractionResult?.score) {
-      notify('Primero extrae el score', 'error');
+      await handleExtractScoreAndParts();
+      // After pipeline completes, extractionResult will be updated
+      // We need to wait for state update, so we'll check again
+      setTimeout(() => {
+        if (extractionResult?.score) {
+          const musicxml = exportFullScoreToMusicXML(extractionResult.score);
+          downloadMusicXML(musicxml, `${project.name}_FULL_SCORE.musicxml`);
+          notify('Full Score exportado como MusicXML', 'success');
+        }
+      }, 100);
       return;
     }
 
@@ -2407,9 +2412,21 @@ function ScoreView({ project, mmcProject, extractionResult, setExtractionResult,
     notify('Full Score exportado como MusicXML', 'success');
   };
 
-  const handleExportAllParts = () => {
+  const handleExportAllParts = async () => {
+    // If no extraction result, run the full pipeline first
     if (!extractionResult?.parts || extractionResult.parts.length === 0) {
-      notify('Primero extrae las particellas', 'error');
+      await handleExtractScoreAndParts();
+      // After pipeline completes, extractionResult will be updated
+      setTimeout(() => {
+        if (extractionResult?.parts && extractionResult.parts.length > 0) {
+          for (const part of extractionResult.parts) {
+            const musicxml = exportPartToMusicXMLString(part);
+            const filename = `${project.name}_${part.instrument_name.replace(/\s+/g, '_')}.musicxml`;
+            downloadMusicXML(musicxml, filename);
+          }
+          notify(`${extractionResult.parts.length} particellas exportadas`, 'success');
+        }
+      }, 100);
       return;
     }
 
@@ -2448,38 +2465,50 @@ function ScoreView({ project, mmcProject, extractionResult, setExtractionResult,
         <div className="flex gap-2 mb-4 flex-wrap">
           <button
             onClick={handleExtractScoreAndParts}
-            disabled={scoreProcessing || !mmcProject}
+            disabled={scoreProcessing}
             className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 rounded text-sm flex items-center gap-2"
           >
-            <Users size={14} /> {scoreProcessing ? 'Extrayendo...' : 'Extraer Score y Parts'}
+            <Users size={14} /> {scoreProcessing ? 'Procesando...' : 'Extraer Score y Parts'}
           </button>
           <button
             onClick={handleExportFullScore}
-            disabled={!extractionResult?.score}
+            disabled={scoreProcessing}
             className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-600 rounded text-sm flex items-center gap-2"
           >
             <Download size={14} /> Export Full Score (MusicXML)
           </button>
           <button
             onClick={handleExportAllParts}
-            disabled={!extractionResult?.parts || extractionResult.parts.length === 0}
+            disabled={scoreProcessing}
             className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded text-sm flex items-center gap-2"
           >
             <Download size={14} /> Export All Parts
           </button>
           <button
             onClick={handleRunScoreTests}
-            className="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded text-sm flex items-center gap-2"
+            disabled={scoreProcessing}
+            className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 rounded text-sm flex items-center gap-2"
           >
             <TestTube size={14} /> Tests Score
           </button>
         </div>
 
-        {!mmcProject && (
-          <div className="bg-amber-900/30 border border-amber-700 rounded p-3 mb-4">
-            <p className="text-sm text-amber-300">
-              <AlertTriangle size={14} className="inline mr-1" />
-              Debes construir la MMC primero (pestaña MMC) antes de extraer score y parts.
+        {scoreProcessing && pipelineProgress && (
+          <div className="bg-blue-900/30 border border-blue-700 rounded p-3 mb-4">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm text-blue-300 font-medium">
+                {pipelineProgress.message}
+              </p>
+              <span className="text-xs text-blue-400">{pipelineProgress.percent.toFixed(0)}%</span>
+            </div>
+            <div className="w-full bg-blue-950 rounded-full h-2">
+              <div 
+                className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                style={{ width: `${pipelineProgress.percent}%` }}
+              />
+            </div>
+            <p className="text-xs text-blue-400 mt-2">
+              Etapa: {pipelineProgress.stage.replace(/_/g, ' ')}
             </p>
           </div>
         )}
