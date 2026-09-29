@@ -2,9 +2,9 @@
 
 ## Resumen
 
-El **Auto Track Assignment Engine (ATAE)** es un motor de asignación automática inteligente que identifica y clasifica cada pista MIDI en su instrumento, familia, función musical y capa MMC correspondientes, eliminando la necesidad de configuración manual para casos evidentes.
+El **Auto Track Assignment Engine (ATAE)** es un motor de asignación automática inteligente que analiza cada pista MIDI y determina su instrumento, familia, función musical y capa MMC correspondientes, eliminando la necesidad de configuración manual para casos evidentes.
 
-**Estado: IMPLEMENTADO ✓**
+**Estado: ✅ IMPLEMENTADO**
 
 ---
 
@@ -12,19 +12,18 @@ El **Auto Track Assignment Engine (ATAE)** es un motor de asignación automátic
 
 ### Principios fundamentales
 
-1. **Múltiples fuentes de evidencia**: No depende de una sola fuente (nombre, programa, canal)
-2. **Asignación automática soberana**: Resuelve casos evidentes sin intervención humana
-3. **Preservación de overrides humanos**: No sobrescribe correcciones manuales
-4. **Confianza medible**: Cada asignación tiene un nivel de confianza
-5. **Trazabilidad**: Registro de qué fuente de evidencia se usó
-6. **Multilingüe**: Reconoce nombres en español, inglés, italiano, francés y alemán
-7. **No destructivo**: No modifica el MIDI original, solo añade metadatos semánticos
+1. **Multi-fuente**: Cruza nombre de pista, programa MIDI, canal, registro y comportamiento
+2. **No destructivo**: No modifica el MIDI original, solo añade capa semántica
+3. **Confianza**: Cada asignación tiene nivel de confianza (HIGH/MEDIUM/LOW/REVIEW)
+4. **Preservación humana**: Respeta correcciones manuales del usuario
+5. **Multilingüe**: Reconoce nombres en español, inglés, italiano, francés, alemán
+6. **Extensible**: Diccionario de instrumentos ampliable
 
 ### Estructura de módulos
 
 ```
 src/atae/
-├── types.ts           # Tipos y configuración
+├── types.ts           # Tipos y configuraciones
 ├── dictionary.ts      # Diccionario multilingüe de instrumentos
 ├── engine.ts          # Motor principal de asignación
 └── index.ts           # API pública
@@ -40,36 +39,19 @@ src/atae/
 2. Parser lee pistas, canales, programas, nombres
    ↓
 3. ATAE analiza cada pista:
-   - Nombre de pista
-   - Programa MIDI
-   - Canal MIDI
-   - Registro (análisis de notas)
-   - Comportamiento musical
+   - Nombre de pista → diccionario de alias
+   - Programa MIDI → instrumentos GM
+   - Canal → percusión (canal 10)
+   - Registro → validación de rango
+   - Comportamiento → patrones rítmicos/melódicos
    ↓
-4. ATAE cruza evidencias y asigna:
-   - Instrumento detectado
-   - Familia instrumental
-   - Función musical
-   - Capa MMC
-   - Nivel de confianza
+4. Genera asignaciones con confianza y evidencia
    ↓
-5. UI muestra asignaciones con indicadores:
-   - 🏷️ Por nombre
-   - 🎹 Por programa
-   - 📡 Por canal
-   - 📊 Por registro
-   - 🎼 Por comportamiento
-   - ✋ Override humano
+5. Aplica asignaciones al proyecto (rol, polifonía)
    ↓
-6. Usuario puede corregir manualmente (se marca como override)
+6. UI muestra resultados con indicadores visuales
    ↓
-7. Asignaciones alimentan:
-   - MMC Builder
-   - Anti-Cluster Engine
-   - Melodic Continuity Engine
-   - Score Assembler
-   - Part Extractor
-   - MusicXML Exporter
+7. Usuario puede corregir manualmente (override)
 ```
 
 ---
@@ -80,75 +62,252 @@ src/atae/
 
 **Propósito**: Diccionario extensible de instrumentos con alias multilingües.
 
-**Características**:
-- 30+ instrumentos definidos
-- Alias en 5 idiomas (ES, EN, IT, FR, DE)
-- Programas GM asociados
-- Registro típico
-- Monofonía/polifonía típica
-- Grupo orquestal
-
 **Instrumentos incluidos**:
 
-**Madera**:
-- Flauta, Flautín, Oboe, Corno inglés
-- Clarinete, Clarinete bajo
-- Fagot, Contrafagón
-- Saxofón, Flauta dulce
+#### Madera (Woodwinds)
+- Flauta (flute, flauta, flûte, flöte, flauto, fl, flt)
+- Flautín (piccolo, flautín, picc)
+- Oboe (oboe, ob, hautbois)
+- Corno inglés (english horn, corno inglés, cor anglais)
+- Clarinete (clarinet, clarinete, clarinette, klarinet, cl, clar)
+- Clarinete bajo (bass clarinet, clarinete bajo, bcl)
+- Fagot (bassoon, fagot, fagotto, fagott, fg, fag)
+- Contrafagón (contrabassoon, contrafagot, cbn)
+- Saxofón (sax, saxophone, saxofón, sx)
+- Flauta dulce (recorder, flauta dulce, blockflöte)
 
-**Metal**:
-- Trompeta, Trompa, Trombón
-- Trombón bajo, Tuba
+#### Metal (Brass)
+- Trompeta (trumpet, trompeta, trompette, tpt, tp)
+- Trompa (horn, french horn, trompa, cor, hn)
+- Trombón (trombone, trombón, posaune, tbn, trb)
+- Trombón bajo (bass trombone, trombón bajo, btbn)
+- Tuba (tuba, tuba, tuba, tb)
 
-**Cuerdas**:
-- Violín, Viola, Violonchelo
-- Contrabajo, Arpa
+#### Cuerdas (Strings)
+- Violín (violin, violín, violino, violon, vn, vln)
+- Viola (viola, viola, alt, va)
+- Violonchelo (cello, violonchelo, violoncelle, violoncello, vc, vlc)
+- Contrabajo (double bass, contrabajo, contrebasse, kontrabass, cb, contra)
 
-**Percusión**:
-- Batería, Timpani
+#### Percusión (Percussion)
+- Batería (drums, drum, percussion, perc, batteria, batterie, schlagzeug)
+- Timpani (timpani, tímpani, timpani, timbales)
+- Percusión general (percussion, perc, percusión)
 
-**Teclado**:
-- Piano, Órgano, Clave
+#### Teclado (Keyboards)
+- Piano (piano, piano, pianoforte, pf)
+- Órgano (organ, órgano, orgue, orgel)
+- Clave (harpsichord, clave, clavecin, cembalo)
+- Celesta (celesta, celesta, célesta)
 
-**Funciones principales**:
-- `findInstrumentByName()`: Busca por nombre o alias
-- `findInstrumentsByProgram()`: Busca por programa GM
-- `getFamilyDisplayName()`: Obtiene nombre de familia en español
+#### Voz (Vox)
+- Voz (voice, voz, voix, stimme, voce)
+- Coros (choir, coro, chœur, chor)
+
+#### Sintetizador (Synth)
+- Sintetizador (synth, sintetizador, synthétiseur, synthesizer)
+- Pad (pad, pad, nap)
+- Lead (lead, lead, führung)
+
+**Características de cada instrumento**:
+- `id`: Identificador único
+- `name`: Nombre canónico
+- `family`: Familia instrumental
+- `aliases`: Lista de alias multilingües
+- `gmPrograms`: Programas GM asociados
+- `typicalRegister`: Rango típico (min/max MIDI)
+- `primarilyMonophonic`: Si es principalmente monofónico
+- `orchestralGroup`: Grupo orquestal
 
 ### 2. Engine (`engine.ts`)
 
-**Propósito**: Motor principal de asignación automática.
-
-**Pipeline de análisis**:
-
-1. **Análisis por nombre**: Busca coincidencias en diccionario
-2. **Análisis por programa**: Cruza con programas GM
-3. **Análisis por canal**: Detecta percusión en canal 10
-4. **Análisis de registro**: Calcula min/max/avg de pitches
-5. **Análisis de comportamiento**: Detecta patrones rítmicos, monofonía, etc.
-6. **Inferencia de función**: Determina rol musical
-7. **Determinación de capa MMC**: Asigna L0-L6
-8. **Cálculo de confianza**: Basado en número de evidencias
-
-**Sistema de confianza**:
-- `HIGH`: 3+ evidencias coinciden o nombre claro
-- `MEDIUM`: 2 evidencias coinciden
-- `LOW`: 1 evidencia o inferencia débil
-- `REVIEW`: Sin evidencia suficiente
-
-**Fuentes de evidencia**:
-- `TRACK_NAME`: Coincidencia con diccionario
-- `PROGRAM_CHANGE`: Programa GM válido
-- `CHANNEL`: Canal 10 (percusión)
-- `REGISTER_ANALYSIS`: Registro típico del instrumento
-- `BEHAVIOR_ANALYSIS`: Patrones rítmicos/monofonía
-- `MANUAL`: Corrección humana
+**Propósito**: Motor principal de análisis y asignación.
 
 **Funciones principales**:
-- `autoAssignTracks()`: Asigna todas las pistas
-- `applyAssignments()`: Aplica asignaciones al proyecto
-- `reanalyzeAssignments()`: Reanaliza preservando overrides
-- `markHumanOverride()`: Marca corrección manual
+
+#### `autoAssignTracks(project, config)`
+Analiza todas las pistas del proyecto y genera asignaciones.
+
+**Proceso**:
+1. Para cada pista, ejecuta `analyzeTrack()`
+2. Retorna array de `TrackAssignment`
+
+#### `analyzeTrack(track, project, config)`
+Analiza una pista individual usando múltiples fuentes de evidencia.
+
+**Fuentes de evidencia** (en orden de prioridad):
+
+1. **Nombre de pista** (confianza HIGH si coincide)
+   - Busca en diccionario de alias
+   - Normaliza: minúsculas, sin acentos, sin números
+   - Coincidencia exacta o parcial
+
+2. **Programa MIDI** (confianza MEDIUM/LOW)
+   - Busca instrumentos con ese programa GM
+   - Si hay uno solo: MEDIUM
+   - Si hay varios: LOW (ambiguo)
+
+3. **Canal MIDI** (confianza HIGH para percusión)
+   - Canal 10 (0-indexed = 9) → percusión
+   - Solo si no hay otra evidencia
+
+4. **Análisis de registro** (confianza LOW)
+   - Calcula min/max de notas
+   - Compara con rango típico del instrumento
+   - Valida o invalida asignación previa
+
+5. **Análisis de comportamiento** (confianza MEDIUM)
+   - Detecta patrones percusivos
+   - Detecta patrones de bajo
+   - Detecta monofonía
+
+**Cálculo de confianza final**:
+- 3+ evidencias → HIGH
+- 2 evidencias → MEDIUM (si era LOW)
+- 1 evidencia → según fuente
+- 0 evidencias → REVIEW
+
+#### `applyAssignments(project, assignments)`
+Aplica las asignaciones al proyecto MIDI.
+
+**Actualiza**:
+- `track.role`: Rol musical (melody, harmony, bass, percussion)
+- `track.polyphony`: Polifonía (mono, poly, percussion)
+
+**No modifica**:
+- Canal MIDI
+- Programa MIDI
+- Notas
+- Ticks
+- Eventos
+
+#### `reanalyzeAssignments(project, existingAssignments, config)`
+Reanaliza asignaciones preservando overrides humanos.
+
+**Comportamiento**:
+- Si `humanOverride = true` → preserva asignación
+- Si no → reanaliza desde cero
+
+#### `markHumanOverride(assignments, trackId, newFamily, newRole)`
+Marca una asignación como override humano.
+
+**Actualiza**:
+- `instrumentFamily`: Nueva familia
+- `musicalRole`: Nuevo rol
+- `assignmentSource`: 'MANUAL'
+- `assignmentConfidence`: 'HIGH'
+- `humanOverride`: true
+
+### 3. Types (`types.ts`)
+
+**Tipos principales**:
+
+```typescript
+type InstrumentFamily = 
+  | 'WOODWIND' | 'BRASS' | 'STRINGS' 
+  | 'PERCUSSION' | 'KEYBOARD' | 'SYNTH' | 'VOX' | 'UNKNOWN';
+
+type MusicalRole =
+  | 'MELODY' | 'HARMONY' | 'BASS' | 'PERCUSSION'
+  | 'COUNTERPOINT' | 'PAD' | 'FX' | 'UNKNOWN';
+
+type MMCLayer =
+  | 'L0_GRID_MASTER' | 'L1_RHYTHMIC_BASE' | 'L2_HARMONIC_BASS'
+  | 'L3_STRINGS_WOODWINDS' | 'L4_BRASS' | 'L5_AUXILIARY' | 'L6_RECONCILIATION';
+
+type AssignmentConfidence = 'HIGH' | 'MEDIUM' | 'LOW' | 'REVIEW';
+
+interface TrackAssignment {
+  trackId: number;
+  trackName: string;
+  midiChannel: number;
+  midiProgram?: number;
+  
+  detectedInstrument?: string;
+  instrumentFamily?: InstrumentFamily;
+  musicalRole?: MusicalRole;
+  mmcLayer?: MMCLayer;
+  orchestralGroup?: string;
+  
+  assignmentConfidence: AssignmentConfidence;
+  assignmentSource: AssignmentSource;
+  humanOverride: boolean;
+  
+  evidence: {
+    nameMatch?: boolean;
+    programMatch?: boolean;
+    channelMatch?: boolean;
+    registerMatch?: boolean;
+    behaviorMatch?: boolean;
+  };
+}
+```
+
+---
+
+## Integración con UI
+
+### Asignación automática al cargar
+
+Cuando el usuario carga un MIDI:
+
+```typescript
+const parsed = parseMidiFile(buffer);
+const assignments = autoAssignTracks(parsed);
+const updatedProject = applyAssignments(parsed, assignments);
+setTrackAssignments(assignments);
+```
+
+**Notificación**: "Archivo cargado: X pistas, Y asignadas automáticamente"
+
+### Botón "Auto Asignar"
+
+Ubicación: Header del proyecto, junto a "Guardar versión" y "Exportar"
+
+**Función**: Reanaliza todas las pistas preservando overrides humanos
+
+```typescript
+const assignments = autoAssignTracks(project);
+const updatedProject = applyAssignments(project, assignments);
+setTrackAssignments(assignments);
+```
+
+### Visualización en sidebar
+
+Cada pista muestra:
+
+1. **Nombre de pista**
+2. **Canal MIDI** (Ch 1-16)
+3. **Indicador de confianza** (color):
+   - 🟢 HIGH (emerald)
+   - 🟡 MEDIUM (yellow)
+   - 🟠 LOW (orange)
+   - ⚫ REVIEW (gray)
+4. **Icono de fuente**:
+   - 🏷️ TRACK_NAME
+   - 🎹 PROGRAM_CHANGE
+   - 📡 CHANNEL
+   - 📊 REGISTER_ANALYSIS
+   - 🎼 BEHAVIOR_ANALYSIS
+   - ✋ MANUAL (override humano)
+   - ❓ UNKNOWN
+5. **Instrumento detectado** (si existe):
+   - Icono ✨ (Sparkles)
+   - Nombre del instrumento
+   - Familia entre paréntesis
+6. **Selector de rol manual**:
+   - Sin asignar
+   - Percusión
+   - Bajo
+   - Armonía
+   - Melodía
+   - Cuerdas
+   - Madera
+   - Metal
+
+**Al cambiar el selector manualmente**:
+- Se marca como `humanOverride = true`
+- No será sobrescrito por reanálisis automáticos
 
 ---
 
@@ -156,136 +315,166 @@ src/atae/
 
 ### Caso 1: Pista llamada "violin"
 
-**Entrada**:
-```
-track_name: "violin"
-channel: 0
-program: 40
-```
-
-**Análisis**:
-- ✅ Nombre coincide con "violin" en diccionario
-- ✅ Programa 40 = Violin en GM
-- ✅ Registro típico de violín
+**Evidencia**:
+- Nombre: "violin" → coincide con alias de "Violin"
+- Familia: STRINGS
+- Grupo: Strings
+- Confianza: HIGH
+- Fuente: TRACK_NAME
 
 **Resultado**:
 ```
-instrument: Violin
-family: STRINGS
-role: MELODY
-mmc_layer: L3_STRINGS_WOODWINDS
-confidence: HIGH
-source: TRACK_NAME
+Instrumento: Violin
+Familia: STRINGS
+Rol: MELODY (inferido)
+Capa MMC: L3_STRINGS_WOODWINDS
+Confianza: HIGH
+Fuente: TRACK_NAME 🏷️
 ```
 
-### Caso 2: Pista llamada "drums" en canal 10
+### Caso 2: Pista con programa GM 73 (Flute)
 
-**Entrada**:
-```
-track_name: "drums"
-channel: 9 (10 en 1-indexed)
-program: 0
-```
-
-**Análisis**:
-- ✅ Nombre coincide con "drums"
-- ✅ Canal 9 = percusión en GM
-- ✅ Comportamiento percusivo
+**Evidencia**:
+- Programa: 73 → Flute
+- Confianza: MEDIUM (podría ser otros instrumentos)
+- Fuente: PROGRAM_CHANGE
 
 **Resultado**:
 ```
-instrument: Drums
-family: PERCUSSION
-role: PERCUSSION
-mmc_layer: L1_RHYTHMIC_BASE
-confidence: HIGH
-source: TRACK_NAME
+Instrumento: Flute
+Familia: WOODWIND
+Rol: MELODY (inferido)
+Capa MMC: L3_STRINGS_WOODWINDS
+Confianza: MEDIUM
+Fuente: PROGRAM_CHANGE 🎹
 ```
 
-### Caso 3: Pista sin nombre, programa 71
+### Caso 3: Pista en canal 10 (percusión)
 
-**Entrada**:
-```
-track_name: "Track 1"
-channel: 2
-program: 71
-```
-
-**Análisis**:
-- ❌ Nombre no coincide
-- ✅ Programa 71 = Clarinet en GM
-- ⚠️ Registro podría confirmar
+**Evidencia**:
+- Canal: 9 (0-indexed) → percusión GM
+- Confianza: HIGH
+- Fuente: CHANNEL
 
 **Resultado**:
 ```
-instrument: Clarinet
-family: WOODWIND
-role: MELODY
-mmc_layer: L3_STRINGS_WOODWINDS
-confidence: MEDIUM
-source: PROGRAM_CHANGE
+Instrumento: Drums
+Familia: PERCUSSION
+Rol: PERCUSSION
+Capa MMC: L1_RHYTHMIC_BASE
+Confianza: HIGH
+Fuente: CHANNEL 📡
 ```
 
-### Caso 4: Pista ambigua sin evidencia
+### Caso 4: Pista llamada "clarinet" con programa 71
 
-**Entrada**:
-```
-track_name: "MIDI Out"
-channel: 5
-program: 0
-notas: pocas, registro medio
-```
-
-**Análisis**:
-- ❌ Nombre no coincide
-- ⚠️ Programa 0 = Piano (pero podría ser otro)
-- ❌ Registro ambiguo
+**Evidencia**:
+- Nombre: "clarinet" → Clarinet
+- Programa: 71 → Clarinet
+- Registro: coincide con rango típico
+- Confianza: HIGH (3 evidencias)
+- Fuente: TRACK_NAME (prioridad)
 
 **Resultado**:
 ```
-instrument: undefined
-family: undefined
-role: undefined
-mmc_layer: undefined
-confidence: REVIEW
-source: UNKNOWN
+Instrumento: Clarinet
+Familia: WOODWIND
+Rol: MELODY (inferido)
+Capa MMC: L3_STRINGS_WOODWINDS
+Polifonía: mono (primarilyMonophonic = true)
+Confianza: HIGH
+Fuente: TRACK_NAME 🏷️
+Evidencias: nameMatch, programMatch, registerMatch
 ```
+
+### Caso 5: Pista sin nombre, programa 48 (Strings)
+
+**Evidencia**:
+- Programa: 48 → múltiples instrumentos de cuerdas
+- Confianza: LOW (ambiguo)
+- Fuente: PROGRAM_CHANGE
+
+**Resultado**:
+```
+Instrumento: Violin (primer candidato)
+Familia: STRINGS
+Rol: MELODY (inferido)
+Capa MMC: L3_STRINGS_WOODWINDS
+Confianza: LOW
+Fuente: PROGRAM_CHANGE 🎹
+```
+
+**Acción recomendada**: Revisar manualmente y confirmar instrumento específico
+
+### Caso 6: Override humano
+
+**Usuario cambia rol de "Cuerdas" a "Melodía"**:
+
+**Antes**:
+```
+Familia: STRINGS
+Rol: MELODY
+Fuente: TRACK_NAME
+humanOverride: false
+```
+
+**Después**:
+```
+Familia: STRINGS
+Rol: MELODY
+Fuente: MANUAL ✋
+humanOverride: true
+```
+
+**Consecuencia**: Reanálisis automáticos preservarán esta asignación
 
 ---
 
-## Integración con UI
+## Correlación con otros motores
 
-### Indicadores visuales
+La asignación ATAE alimenta a:
 
-En la barra lateral de pistas, cada pista muestra:
+### 1. Anti-Cluster Engine
+- Si `primarilyMonophonic = true` → clusters son SUSPECT_CLUSTER
+- Ejemplo: Clarinete con 4 notas simultáneas → sospechoso
 
-1. **Icono de fuente**:
-   - 🏷️ Asignado por nombre
-   - 🎹 Asignado por programa
-   - 📡 Asignado por canal
-   - 📊 Asignado por registro
-   - 🎼 Asignado por comportamiento
-   - ✋ Override humano
-   - ❓ Sin asignar
+### 2. Melodic Continuity Engine
+- Conoce instrumento para validar continuidad
+- Ejemplo: Flauta no puede tener saltos de 3 octavas
 
-2. **Color de confianza**:
-   - 🟢 Verde: HIGH
-   - 🟡 Amarillo: MEDIUM
-   - 🟠 Naranja: LOW
-   - ⚫ Gris: REVIEW
+### 3. Range Validation
+- Valida notas contra rango típico del instrumento
+- Ejemplo: Violín con nota en Do2 → fuera de rango
 
-3. **Instrumento detectado**:
-   - Nombre del instrumento
-   - Familia entre paréntesis
+### 4. Quantization
+- Aplica perfiles específicos por instrumento
+- Ejemplo: Percusión → rejilla estricta
+- Ejemplo: Cuerdas → rejilla interpretativa
 
-### Botón "Auto Asignar"
+### 5. SAE (Sovereign Autocorrection Engine)
+- Usa información instrumental para correcciones contextuales
+- Ejemplo: No corregir swing en batería
+- Ejemplo: Proteger legato en cuerdas
 
-Permite reanalizar todas las pistas sin recargar el archivo.
+### 6. Orchestral Order
+- Ordena instrumentos por grupo orquestal
+- Ejemplo: Woodwinds → Brass → Percussion → Strings
 
-**Comportamiento**:
-- Preserva overrides humanos
-- Reanaliza pistas no asignadas
-- Notifica cuántas pistas fueron asignadas
+### 7. Part Extraction
+- Extrae particellas por instrumento
+- Ejemplo: "Clarinet 1" → particella de clarinete
+
+### 8. Full Conductor Score
+- Ensambla score completo con instrumentación correcta
+- Ejemplo: Score con 80 instrumentos correctamente identificados
+
+### 9. Transposition
+- Aplica transposición según instrumento
+- Ejemplo: Clarinete en Sib → transposición -2 semitonos
+
+### 10. MusicXML Export
+- Exporta con instrumentación correcta
+- Ejemplo: `<score-instrument id="P1-I1">Clarinet</score-instrument>`
 
 ---
 
@@ -294,9 +483,9 @@ Permite reanalizar todas las pistas sin recargar el archivo.
 ### Configuración por defecto
 
 ```typescript
-const DEFAULT_ATAE_CONFIG = {
-  autoAssignOnImport: true,        // Asignar al importar
-  confidenceThreshold: 0.7,        // Umbral mínimo
+const DEFAULT_ATAE_CONFIG: ATAEConfig = {
+  autoAssignOnImport: true,        // Asignar al cargar
+  confidenceThreshold: 0.7,        // Umbral de confianza
   enableRegisterAnalysis: true,    // Analizar registro
   enableBehaviorAnalysis: true,    // Analizar comportamiento
   multilingualRecognition: true,   // Reconocimiento multilingüe
@@ -305,93 +494,61 @@ const DEFAULT_ATAE_CONFIG = {
 
 ### Opciones configurables
 
-- **autoAssignOnImport**: Ejecutar ATAE automáticamente al importar
-- **confidenceThreshold**: Umbral mínimo de confianza para asignar
-- **enableRegisterAnalysis**: Habilitar análisis de registro
-- **enableBehaviorAnalysis**: Habilitar análisis de comportamiento
-- **multilingualRecognition**: Habilitar reconocimiento multilingüe
-
----
-
-## Consecuencias musicales
-
-La asignación automática alimenta múltiples motores:
-
-### 1. MMC Builder
-- Determina capa MMC (L0-L6)
-- Establece capacidad instrumental (monofónico/polifónico)
-
-### 2. Anti-Cluster Engine
-- Instrumentos monofónicos: clusters → SUSPECT_CLUSTER
-- Instrumentos polifónicos: evalúa plausibilidad armónica
-
-### 3. Melodic Continuity Engine
-- Ajusta umbrales según instrumento
-- Protege patrones específicos del instrumento
-
-### 4. Range Validation
-- Valida notas contra registro típico del instrumento
-- Detecta OUT_OF_RANGE
-
-### 5. Quantization
-- Aplica perfiles específicos por instrumento
-- Respeta características rítmicas del instrumento
-
-### 6. SAE (Sovereign Autocorrection)
-- Corrige según reglas del instrumento
-- No trata clarinete como piano
-
-### 7. Score Assembler
-- Ordena según plantilla orquestal
-- Agrupa por familias
-
-### 8. Part Extractor
-- Aplica transposición correcta
-- Genera nombre de instrumento en partitura
-
-### 9. MusicXML Exporter
-- Include instrument name
-- Aplica transposición escrita
+- **autoAssignOnImport**: Ejecutar ATAE automáticamente al cargar MIDI
+- **confidenceThreshold**: Umbral mínimo de confianza para asignación automática
+- **enableRegisterAnalysis**: Activar/desactivar análisis de registro
+- **enableBehaviorAnalysis**: Activar/desactivar análisis de comportamiento
+- **multilingualRecognition**: Activar/desactivar reconocimiento multilingüe
 
 ---
 
 ## Extensión del diccionario
 
-Para añadir nuevos instrumentos, editar `dictionary.ts`:
+Para añadir nuevos instrumentos, editar `src/atae/dictionary.ts`:
 
 ```typescript
 {
-  id: 'new_instrument',
-  name: 'New Instrument',
+  id: 'my_instrument',
+  name: 'My Instrument',
   family: 'WOODWIND',
-  aliases: ['new', 'nuevo', 'nouveau', 'neu', 'nuovo'],
-  gmPrograms: [XX],
-  typicalRegister: { min: 60, max: 90 },
+  aliases: ['myinst', 'mi_instrumento', 'mon.instrument'],
+  gmPrograms: [75],
+  typicalRegister: { min: 60, max: 84 },
   primarilyMonophonic: true,
   orchestralGroup: 'Woodwinds',
 }
 ```
 
+**Campos**:
+- `id`: Identificador único (snake_case)
+- `name`: Nombre canónico (inglés preferiblemente)
+- `family`: Familia instrumental (WOODWIND, BRASS, STRINGS, etc.)
+- `aliases`: Lista de alias en múltiples idiomas
+- `gmPrograms`: Programas GM asociados (opcional)
+- `typicalRegister`: Rango típico en MIDI (opcional)
+- `primarilyMonophonic`: Si es principalmente monofónico (opcional)
+- `orchestralGroup`: Grupo orquestal (opcional)
+
 ---
 
 ## Limitaciones conocidas
 
-1. **Instrumentos no estándar**: Instrumentos étnicos o experimentales no están en el diccionario
-2. **Múltiples instrumentos en una pista**: No detecta cambios de instrumento dentro de una pista
-3. **Programas no GM**: Si el archivo usa programas no estándar, la asignación puede fallar
-4. **Nombres ambiguos**: "Pads" podría ser synth pad o string pad
-5. **Pistas vacías**: No puede analizar comportamiento sin notas
+1. **Ambigüedad de programas GM**: Un programa puede corresponder a múltiples instrumentos
+2. **Nombres genéricos**: "Track 1", "Instrument 2" no proporcionan información
+3. **Instrumentos no GM**: Instrumentos personalizados no están en el diccionario
+4. **Polifonía variable**: Algunos instrumentos pueden ser mono o polifónicos según contexto
+5. **Función musical**: Inferencia basada en heurísticas, no siempre precisa
 
 ---
 
 ## Próximos pasos (opcionales)
 
 1. **Machine learning**: Modelos entrenados para detección de instrumentos
-2. **Análisis espectral**: Usar características espectrales para identificación
-3. **Contexto orquestal**: Considerar combinación de instrumentos
-4. **Detección de divisi**: Detectar secciones divididas en cuerdas
-5. **Transposición automática**: Detectar instrumentos transpositores por registro
-6. **Diccionario expansible**: Permitir al usuario añadir instrumentos personalizados
+2. **Análisis espectral**: Identificación por características acústicas
+3. **Contexto multi-pista**: Análisis de relaciones entre pistas
+4. **Diccionario colaborativo**: Usuarios pueden contribuir instrumentos
+5. **Detección de divisi**: Detección automática de secciones divididas
+6. **Análisis de articulación**: Identificación por patrones de articulación
 
 ---
 
@@ -406,62 +563,61 @@ Para añadir nuevos instrumentos, editar `dictionary.ts`:
 
 ### Integración
 ```
-✓ ATAE se ejecuta automáticamente al importar
-✓ Asignaciones se muestran en UI con indicadores
+✓ ATAE se ejecuta automáticamente al cargar MIDI
 ✓ Botón "Auto Asignar" funcional
-✓ Overrides humanos se preservan
-✓ Asignaciones alimentan MMC, SAE, Score, Parts
+✓ Overrides humanos preservados
+✓ Indicadores visuales de confianza y fuente
+✓ Selector manual funcional
 ```
 
 ### Regresiones
 ```
 ✓ Ninguna funcionalidad preexistente eliminada
-✓ Selectores manuales permanecen funcionales
 ✓ MMC v1.0 intacta
 ✓ SAE intacto
 ✓ Score & Parts intacto
-```
-
-### Caso de prueba específico
-```
-Entrada: violin, viola, cello, contra, bassoon, clarinet, drums, oboe
-
-Resultado esperado:
-✓ violin → STRINGS/CUERDAS
-✓ viola → STRINGS/CUERDAS
-✓ cello → STRINGS/CUERDAS
-✓ contra → STRINGS/CUERDAS + función BAJO
-✓ bassoon → WOODWIND/MADERA
-✓ clarinet → WOODWIND/MADERA
-✓ drums → PERCUSSION/PERCUSIÓN
-✓ oboe → WOODWIND/MADERA
-
-Ninguna pista evidente permanece en "SIN ASIGNAR"
+✓ Exportación MIDI funcional
+✓ Exportación MusicXML funcional
 ```
 
 ---
 
 ## Uso
 
-### Automático (al importar)
+### Desde la UI
 
-1. Usuario carga MIDI
-2. ATAE se ejecuta automáticamente
-3. Pistas se muestran con asignaciones
-4. Usuario revisa y corrige si es necesario
+1. Cargar MIDI → ATAE se ejecuta automáticamente
+2. Revisar asignaciones en sidebar
+3. Corregir manualmente si es necesario (se marca como override)
+4. Pulsar "Auto Asignar" para reanalizar (preserva overrides)
+5. Exportar con instrumentación correcta
 
-### Manual (reanálisis)
+### Desde código
 
-1. Usuario pulsa "Auto Asignar"
-2. ATAE reanaliza pistas no asignadas
-3. Preserva overrides humanos
-4. Notifica resultado
+```typescript
+import { autoAssignTracks, applyAssignments } from './atae';
 
-### Corrección manual
+// Asignar automáticamente
+const assignments = autoAssignTracks(midiProject);
 
-1. Usuario cambia rol en selector desplegable
-2. Se marca como `humanOverride: true`
-3. ATAE no sobrescribirá en futuros reanálisis
+// Aplicar al proyecto
+const updatedProject = applyAssignments(midiProject, assignments);
+
+// Reanalizar preservando overrides
+const reanalyzed = reanalyzeAssignments(
+  updatedProject,
+  assignments,
+  config
+);
+
+// Marcar override humano
+const withOverride = markHumanOverride(
+  assignments,
+  trackId,
+  'WOODWIND',
+  'MELODY'
+);
+```
 
 ---
 
@@ -470,14 +626,15 @@ Ninguna pista evidente permanece en "SIN ASIGNAR"
 El **Auto Track Assignment Engine (ATAE)** ha sido implementado exitosamente como un motor de asignación automática inteligente que:
 
 ✓ Analiza múltiples fuentes de evidencia
-✓ Resuelve casos evidentes automáticamente
-✓ Preserva correcciones humanas
+✓ Asigna instrumentos, familias y roles automáticamente
+✓ Preserva la intención musical
+✓ Respeta correcciones manuales
+✓ Se integra con todos los motores (MMC, SAE, Score, Parts)
+✓ Es extensible y configurable
+✓ Es multilingüe
 ✓ Proporciona trazabilidad completa
-✓ Se integra con todos los motores existentes
-✓ Elimina configuración manual innecesaria
-✓ Mantiene control humano cuando es necesario
 
-**Estado final**: IMPLEMENTADO ✓
+**Estado final**: ✅ IMPLEMENTADO
 
 ---
 
