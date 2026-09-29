@@ -2447,6 +2447,115 @@ function ScoreView({ project, mmcProject, setMmcProject, extractionResult, setEx
     notify(`Particella de ${part.instrument_name} exportada`, 'success');
   };
 
+  const handleExportSinglePartMidi = (part: IndividualPartType) => {
+    if (!mmcProject || !extractionResult) {
+      notify('Primero debes extraer Score y Parts', 'error');
+      return;
+    }
+
+    try {
+      const result = exportCompleteMidi(project, mmcProject, extractionResult);
+      const paddedIndex = String(extractionResult.parts.indexOf(part) + 1).padStart(2, '0');
+      const safeName = part.instrument_name.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').substring(0, 30);
+      const filename = `${paddedIndex}_${project.name}_${safeName}.mid`;
+      
+      const midiData = result.partMidiFiles.get(`${paddedIndex}_${safeName}.mid`);
+      if (midiData) {
+        const blob = new Blob([midiData as BlobPart], { type: 'audio/midi' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        notify(`MIDI de ${part.instrument_name} exportado`, 'success');
+      }
+    } catch (e) {
+      notify(`Error al exportar MIDI: ${(e as Error).message}`, 'error');
+    }
+  };
+
+  const handleExportFullScoreMidi = async () => {
+    if (!extractionResult || !mmcProject) {
+      await handleExtractScoreAndParts();
+      setTimeout(() => {
+        if (extractionResult && mmcProject) {
+          performFullScoreMidiExport();
+        }
+      }, 100);
+      return;
+    }
+    performFullScoreMidiExport();
+  };
+
+  const performFullScoreMidiExport = () => {
+    if (!extractionResult || !mmcProject) {
+      notify('No hay datos para exportar', 'error');
+      return;
+    }
+
+    try {
+      const result = exportCompleteMidi(project, mmcProject, extractionResult);
+      const filename = `${project.name}_FULL_CONDUCTOR_SCORE.mid`;
+      
+      const blob = new Blob([result.conductorScoreMidi as BlobPart], { type: 'audio/midi' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      notify('Full Score MIDI exportado', 'success');
+    } catch (e) {
+      notify(`Error al exportar Full Score MIDI: ${(e as Error).message}`, 'error');
+    }
+  };
+
+  const handleExportAllPartsMidi = async () => {
+    if (!extractionResult || !mmcProject) {
+      await handleExtractScoreAndParts();
+      setTimeout(() => {
+        if (extractionResult && mmcProject) {
+          performAllPartsMidiExport();
+        }
+      }, 100);
+      return;
+    }
+    performAllPartsMidiExport();
+  };
+
+  const performAllPartsMidiExport = () => {
+    if (!extractionResult || !mmcProject) {
+      notify('No hay datos para exportar', 'error');
+      return;
+    }
+
+    try {
+      const result = exportCompleteMidi(project, mmcProject, extractionResult);
+      
+      // Descargar cada particella individualmente
+      for (const [fileName, midiData] of result.partMidiFiles) {
+        const blob = new Blob([midiData as BlobPart], { type: 'audio/midi' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${project.name}_${fileName}`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      }
+      
+      notify(`${result.partMidiFiles.size} particellas MIDI exportadas`, 'success');
+    } catch (e) {
+      notify(`Error al exportar particellas MIDI: ${(e as Error).message}`, 'error');
+    }
+  };
+
   const handleRunScoreTests = () => {
     const results = runAllScoreTests();
     setScoreTests(results);
