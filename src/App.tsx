@@ -18,6 +18,7 @@ import { extractScoreAndParts, exportFullScoreToMusicXML, exportPartToMusicXMLSt
 import { runSovereignAutocorrection, SAEResult, AutocorrectReport, AnalysisProgress } from './sae';
 import { DependencyResolver, PipelineProgress } from './pipeline';
 import { autoAssignTracks, applyAssignments, TrackAssignment, getFamilyDisplayName } from './atae';
+import { exportCompleteMidi, downloadMidiPackage, MidiExportResult } from './export';
 import { Upload, Play, Pause, Square, Download, Undo2, Redo2, Settings, Music, AlertTriangle, CheckCircle, Info, X, ChevronRight, Layers, Grid3X3, Volume2, Save, FolderOpen, Trash2, FileAudio, ZoomIn, ZoomOut, SkipBack, SkipForward, BookOpen, Activity, Mic2, Wand2, ListChecks, BarChart3, Piano, HelpCircle, Copy, ArrowUpDown, Scissors, Link2, Move, Shield, Type, Database, TestTube, FileMusic, Users, Zap, Sparkles } from 'lucide-react';
 
 type View = 'welcome' | 'project' | 'projects-list' | 'examples' | 'help';
@@ -2355,6 +2356,7 @@ function ScoreView({ project, mmcProject, setMmcProject, extractionResult, setEx
 }) {
   const [scoreTests, setScoreTests] = useState<{ name: string; passed: boolean; message: string }[] | null>(null);
   const [pipelineProgress, setPipelineProgress] = useState<PipelineProgress | null>(null);
+  const [midiExportResult, setMidiExportResult] = useState<MidiExportResult | null>(null);
 
   const handleExtractScoreAndParts = async () => {
     setScoreProcessing(true);
@@ -2452,6 +2454,57 @@ function ScoreView({ project, mmcProject, setMmcProject, extractionResult, setEx
     notify(`Tests Score: ${passed}/${results.length} aprobados`, passed === results.length ? 'success' : 'info');
   };
 
+  const handleExportCompleteMidi = async () => {
+    // If no extraction result, run the full pipeline first
+    if (!extractionResult || !mmcProject) {
+      await handleExtractScoreAndParts();
+      // Wait for state update
+      setTimeout(() => {
+        if (extractionResult && mmcProject) {
+          performMidiExport();
+        }
+      }, 100);
+      return;
+    }
+
+    performMidiExport();
+  };
+
+  const performMidiExport = () => {
+    if (!extractionResult || !mmcProject) {
+      notify('No hay datos para exportar', 'error');
+      return;
+    }
+
+    try {
+      setScoreProcessing(true);
+      notify('Generando exportación MIDI completa...', 'info');
+
+      // Export complete MIDI package
+      const result = exportCompleteMidi(project, mmcProject, extractionResult);
+      setMidiExportResult(result);
+
+      // Download all files
+      downloadMidiPackage(result, project.name);
+
+      if (result.validation.isValid) {
+        notify(
+          `EXPORTACIÓN MIDI VALIDADA — OK: ${result.partMidiFiles.size} particellas + Score Conductor + Master`,
+          'success'
+        );
+      } else {
+        notify(
+          `Exportación completada con advertencias: ${result.validation.errors.length} errores`,
+          'error'
+        );
+      }
+    } catch (e) {
+      notify(`Error en exportación MIDI: ${(e as Error).message}`, 'error');
+    } finally {
+      setScoreProcessing(false);
+    }
+  };
+
   return (
     <div className="space-y-4 max-w-5xl">
       <div className="bg-gray-800 rounded-lg p-4">
@@ -2490,6 +2543,13 @@ function ScoreView({ project, mmcProject, setMmcProject, extractionResult, setEx
             className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 rounded text-sm flex items-center gap-2"
           >
             <TestTube size={14} /> Tests Score
+          </button>
+          <button
+            onClick={handleExportCompleteMidi}
+            disabled={scoreProcessing}
+            className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-blue-600 hover:from-emerald-700 hover:to-blue-700 disabled:from-gray-600 disabled:to-gray-600 text-white rounded text-sm flex items-center gap-2 font-semibold"
+          >
+            <Download size={14} /> Exportar MIDI Completo
           </button>
         </div>
 
@@ -2599,6 +2659,58 @@ function ScoreView({ project, mmcProject, setMmcProject, extractionResult, setEx
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {midiExportResult && (
+          <div className="bg-gradient-to-br from-emerald-900/30 to-blue-900/30 border border-emerald-700 rounded-lg p-4 mt-4">
+            <h4 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+              <CheckCircle size={16} className="text-emerald-400" />
+              EXPORTACIÓN MIDI VALIDADA — OK
+            </h4>
+            
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div className="bg-gray-800 rounded p-2">
+                <p className="text-xs text-gray-400">Master MIDI</p>
+                <p className="text-sm text-white font-mono">{project.name}_MASTER.mid</p>
+              </div>
+              <div className="bg-gray-800 rounded p-2">
+                <p className="text-xs text-gray-400">Score Conductor</p>
+                <p className="text-sm text-white font-mono">{project.name}_SCORE_CONDUCTOR_COMPLETO.mid</p>
+              </div>
+              <div className="bg-gray-800 rounded p-2 col-span-2">
+                <p className="text-xs text-gray-400">Particellas MIDI</p>
+                <p className="text-sm text-white font-mono">{midiExportResult.partMidiFiles.size} archivos generados</p>
+              </div>
+            </div>
+
+            <div className="bg-gray-800 rounded p-3 mb-3">
+              <h5 className="text-xs font-semibold text-white mb-2">Validación de Exportación</h5>
+              <div className="space-y-1">
+                {midiExportResult.validation.checks.map((check, i) => (
+                  <div key={i} className={`flex items-center gap-2 text-xs ${check.passed ? 'text-emerald-400' : 'text-red-400'}`}>
+                    <span>{check.passed ? '✓' : '✗'}</span>
+                    <span className="font-medium">{check.name}:</span>
+                    <span className="text-gray-400">{check.message}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="bg-gray-800 rounded p-3">
+              <h5 className="text-xs font-semibold text-white mb-2">Manifest de Correspondencias</h5>
+              <div className="space-y-1 max-h-40 overflow-y-auto text-xs">
+                {midiExportResult.manifest.tracks.map((track, i) => (
+                  <div key={i} className="flex items-center justify-between text-gray-300">
+                    <span className="font-mono">{track.partFileName}</span>
+                    <span className="text-gray-500">
+                      {track.instrumentName} · Ch {track.midiChannel + 1}
+                      {track.midiProgram !== null && ` · Prog ${track.midiProgram}`}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )}
